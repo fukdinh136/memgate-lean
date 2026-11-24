@@ -93,6 +93,7 @@ hành động (cổng chỉ xét nguồn T).
 ## 7. Tài liệu
 
 - Đặc tả: `Group12_Project13_SolutionDesignSpecification.pdf` (người dùng giữ; mục 6 thực thể, mục 7 thuật toán).
+- Bản markdown trong repo (xuất từ Claude Docs ngày 24/11/2026, đọc được không cần tài khoản): `docs/tai-lieu-trien-khai.md`, `docs/bao-cao-ket-qua-thuc-nghiem.md`, `docs/tong-quan-trien-khai.md` (xem `docs/README.md`). Khi sửa Claude Docs thì xuất lại để hai bản khớp.
 - Claude Docs (thuộc tài khoản người dùng; tài khoản khác cần được chia sẻ mới mở được):
   - Tài liệu triển khai (bảng 21 việc, checklist): https://claude.ai/artifact/KqcdJFNM33wB9Wunc9PoCY
   - Báo cáo kết quả thực nghiệm: https://claude.ai/artifact/KcDJi6hXSNWXNC3DkN4pwA
