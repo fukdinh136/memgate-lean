@@ -1,0 +1,21 @@
+# Policy (việc 6, FR7) theo thực thể Role, Agent, Policy ở mục 6 của đặc tả.
+# - Mỗi agent một vai trò; agent không có trong `agents` nhận default_role (bỏ dòng đó -> agent lạ bị deny).
+# - Deny thắng; không policy nào khớp -> deny. role_id "*" khớp mọi vai trò.
+# - Mục private chỉ chủ sở hữu được đọc/ghi/promote (bất biến trong code, policy không ghi đè được).
+# - promote kiểm trên scope ĐÍCH. condition chưa hỗ trợ (chỉ nhận null).
+# Phải giống DEFAULT_POLICY trong memgate/policy.py (tests/test_policy.py kiểm tra).
+roles: [member, admin]
+default_role: member
+agents:
+  planner: member
+  coder: member
+  researcher: member
+policies:
+  - {policy_id: p01, role_id: "*", scope: private, action: read, effect: allow}
+  - {policy_id: p02, role_id: "*", scope: private, action: write, effect: allow}
+  - {policy_id: p03, role_id: "*", scope: team, action: read, effect: allow}
+  - {policy_id: p04, role_id: "*", scope: team, action: write, effect: allow}
+  - {policy_id: p05, role_id: "*", scope: team, action: promote, effect: allow}
+  - {policy_id: p06, role_id: "*", scope: global, action: read, effect: allow}
+  - {policy_id: p07, role_id: admin, scope: global, action: write, effect: allow}
+  - {policy_id: p08, role_id: admin, scope: global, action: promote, effect: allow}

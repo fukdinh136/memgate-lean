@@ -1,0 +1,21 @@
+# PostgreSQL 17 + pgvector cho demo và thí nghiệm (việc 4c).
+# docker compose -f infra/docker-compose.yml up -d
+# set DATABASE_URL=postgresql://memgate:memgate@localhost:5432/memgate
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: memgate
+      POSTGRES_PASSWORD: memgate
+      POSTGRES_DB: memgate
+    ports:
+      - "5432:5432"
+    volumes:
+      - memgate-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memgate -d memgate"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  memgate-pg:

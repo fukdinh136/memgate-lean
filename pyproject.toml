@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memgate"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2", "pyyaml", "numpy"]
+
+[project.optional-dependencies]
+gemini = ["google-genai"]
+openai = ["openai"]
+anthropic = ["anthropic"]
+ml = ["onnxruntime", "tokenizers", "huggingface_hub", "detect-secrets"]   # torch bị Application Control chặn
+torch = ["sentence-transformers"]   # chỉ cho máy chạy được torch
+analysis = ["pandas", "scipy", "matplotlib"]
+postgres = ["pg8000"]   # thuần Python; psycopg[binary] bị Application Control chặn DLL
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["memgate", "harness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

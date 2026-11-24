@@ -1,0 +1,25 @@
+llm:
+  provider: gemini          # gemini | openrouter | openai | anthropic
+  model: gemini-3.5-flash-lite   # model chính của mọi kết quả (K1, K3)
+  # Đã thử meta-llama/llama-3.1-8b-instruct qua OpenRouter (--provider openrouter --model ...):
+  # parse lỗi nhiều, tấn công không còn sống, bộ hợp nhất từ chối tóm tắt -> không dùng làm model chính.
+  temperature: 0           # để trống nếu model không nhận temperature
+  cache_path: .cache/llm.sqlite
+  rpm: 14                   # gói miễn phí Gemini 15 lời gọi/phút; OpenRouter trả phí có thể đặt 60
+  # chế độ cache đặt bằng biến môi trường LLM_CACHE=readwrite|readonly|off
+
+experiment:
+  seeds: [0, 1, 2]
+  gate: memgate             # null | memgate
+
+memgate:
+  db_path: .cache/memgate.sqlite
+  embedding_model: BAAI/bge-small-en-v1.5   # hoặc đặt MEMGATE_EMBED_MODEL=<thư mục model trên máy>
+  # Bật/tắt từng biện pháp để ablation (tuần 2)
+  mitigations:
+    action_gate: true
+    boundary_labeling: true
+    validation: false
+    quarantine: false
+    expiration: false
+    human_review: false
