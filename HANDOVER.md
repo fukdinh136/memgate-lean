@@ -29,7 +29,7 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   set LLM_CACHE=readwrite
   set MEMGATE_EMBED_MODEL=          :: để trống = BGE (mặc định); =hash để dùng embedding băm
   ```
-- `python -m pytest -q` phải ra **170 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
+- `python -m pytest -q` phải ra **196 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
 - LLM: Gemini `gemini-3.5-flash-lite` (config `configs/default.yaml`), cache SQLite `.cache/llm.sqlite` (có trong git).
   Gói miễn phí ~500 lời gọi/ngày/project, reset 15:00 giờ VN. Nhiều key: `secrets/gemini_keys.txt` (mỗi dòng
   một key, mỗi key một project), `harness/llm.py` tự xoay vòng, bỏ qua key hết quota/403.
@@ -52,7 +52,8 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   `memgate/embed.py` (`OnnxEmbedder` = `Xenova/bge-small-en-v1.5`, mặc định; `HashEmbedder` cho test).
 - `harness/`: vòng lặp agent + `delegate`; đội `pair`, `chain`; `run.py --scenario --gate null memgate
   --n-seeds N --consolidate MODE --store sqlite|postgres --provider`; trace ra `runs/<kịch bản>__<gate>__<model>[__mode][__postgres][__hash].jsonl`.
-  Kịch bản: `k1_relay`, `k1_chain`, `k3_consolidate_email`, `k3_rederive_email`. MEM-INV-Bench ở `harness/meminv/`.
+  Kịch bản: `k1_relay`, `k1_chain`, `k3_consolidate_email`, `k3_rederive_email`, `meminv_<sid>[_clean]` (việc 3).
+  MEM-INV-Bench ở `harness/meminv/`; `python -m harness.meminv.to_yaml [--check]` sinh YAML nhiều agent từ bộ gốc.
 - `harness/llm.py`: provider gemini/openrouter/openai/anthropic, cache, rpm, thử lại 429/5xx/lỗi mạng, pool key.
   Đã thử Llama 3.1 8B qua OpenRouter: không dùng được (parse lỗi, tấn công không sống, bộ hợp nhất từ chối).
 
@@ -63,6 +64,7 @@ Trace BGE: `runs/*__memgate__*.jsonl` không hậu tố; bản HashEmbedder cũ 
 | Thí nghiệm | NullGate | MemGate |
 |---|---|---|
 | Baseline MEM-INV-Bench | ASR 143/145 | — |
+| MEM-INV nhiều agent (memory chung), 3 kịch bản × 30 seed | ASR 80/90 | ASR 0/90, benign 84/90; bản sạch 90/90 |
 | K1 relay + chain, 30 seed mỗi kịch bản | ASR 33/60 | ASR 0/60, benign 59/60 |
 | K3 consolidate, 30 seed | ASR 27/30 | fail_closed 0/30, partition 0/30, rederive 0/30 |
 | K3 rederive (trang nhắc lại sự thật T), 30 seed | ASR 29/30 | rederive 0/30; 0 mệnh đề độc lên T; hạn nộp được chuộc 28/30 |
@@ -77,8 +79,8 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 5. Trạng thái việc (kế hoạch 21 việc trong Tài liệu triển khai)
 
-- **Xong:** 1, 2, 4a, 4b (ONNX; K1/K3 đã chạy lại với BGE), 4c, 5, 6, 11a, 13, 14.
-- **Đang dở:** 3 (còn chuyển 3–5 kịch bản MEM-INV-Bench sang nhiều agent), 16 (mới có K1, K3), 17 (còn trace vàng,
+- **Xong:** 1, 2, 3 (`notes/meminv_multiagent.md`), 4a, 4b (ONNX; K1/K3 đã chạy lại với BGE), 4c, 5, 6, 11a, 13, 14.
+- **Đang dở:** 16 (mới có K1, K3), 17 (còn trace vàng,
   metric phát hiện/xếp hạng), 18 (tái lập đạt; còn bản MemGate cố tình hỏng).
 - **Chưa làm:** 7 (thiết kế đã gửi, chờ duyệt: vòng đời 7 trạng thái, retention theo Clock, audit hash chain với
   khoá ghi, redact bằng detect-secrets, công tắc `mitigations` + ablation `boundary_labeling=off`), 8, 9, 10, 11b,
@@ -98,4 +100,5 @@ hành động (cổng chỉ xét nguồn T).
   - Tài liệu triển khai (bảng 21 việc, checklist): https://claude.ai/artifact/KqcdJFNM33wB9Wunc9PoCY
   - Báo cáo kết quả thực nghiệm: https://claude.ai/artifact/KcDJi6hXSNWXNC3DkN4pwA
   - Tổng quan triển khai (sơ đồ): https://claude.ai/artifact/6fdbofsK2LZPTSKuT1K1Kp
-- Trong repo: `notes/baseline.md`, `notes/baseline_results.md`, `notes/k1_results.md` (K1, K3, NLI, rederive).
+- Trong repo: `notes/baseline.md`, `notes/baseline_results.md`, `notes/k1_results.md` (K1, K3, NLI, rederive),
+  `notes/meminv_multiagent.md` (việc 3).

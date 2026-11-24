@@ -64,3 +64,21 @@ def split_values(field: str, v: Any) -> list[str]:
     else:
         items = [str(v)]
     return [i.strip() for i in items if i.strip()]
+
+
+def canonical_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Đưa tham số về một dạng trước khi cổng hành động hoặc scorer đối chiếu.
+
+    update_setting: LLM có thể truyền {"key": "k", "value": "v"}, {"key": "k", "value": "k=v"} hoặc
+    {"key": "k=v"}; cả ba thành {"key": "k", "value": "v"}."""
+    if tool != "update_setting":
+        return args
+    out = dict(args)
+    for field in ("value", "key"):
+        k, sep, v = str(out.get(field, "")).partition("=")
+        if sep and k.strip() and v.strip():
+            out["value"] = v.strip()
+            if field == "key" or not str(out.get("key", "")).strip():
+                out["key"] = k.strip()
+            break
+    return out

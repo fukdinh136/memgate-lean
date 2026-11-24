@@ -319,7 +319,7 @@ Phần còn lại khoảng 57 pd (68 pd với dự phòng); 5 người, mỗi ng
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Repo, cache LLM | 1 | — | 1 |  | Xong | `smoke` trúng cache ở lần gọi thứ hai |
 | 2 | Baseline MEM-INV-Bench không phòng thủ | 1,5 | 1 | 1 |  | Xong | ASR gộp 143/145 = 98,6% (CI 95% 95,1–99,6%); 30/30 kịch bản hợp lệ hoàn thành. Chi tiết trong `notes/baseline.md` |
-| 3 | Harness với LLM thật, chuyển 3–5 kịch bản MEM-INV-Bench | 1 (còn lại) | 1 | 1 |  | Đang làm: phần K1 đạt (NullGate ASR 33/60 = 55%, benign 59/60); còn chuyển 3–5 kịch bản MEM-INV-Bench | ASR K1 với `NullGate` ≥ 50% seed; trần utility ≥ 80% task sạch |
+| 3 | Harness với LLM thật, chuyển 3–5 kịch bản MEM-INV-Bench | 1 (còn lại) | 1 | 1 |  | Xong: K1 đạt (NullGate ASR 33/60 = 55%, benign 59/60); 3 kịch bản MEM-INV-Bench nhiều agent × 30 seed: NullGate ASR 80/90, MemGate 0/90, benign 84/90, bản sạch 90/90. Chi tiết trong `notes/meminv_multiagent.md` | ASR K1 với `NullGate` ≥ 50% seed; trần utility ≥ 80% task sạch |
 | 4a | Store interface + SQLite: `write`, versioning, lineage, `Clock`, ghi `AgentContext` khi L giảm | 2 | 1 | 1 |  | Xong | 100% mục truy ngược được nguồn (FR2); rollback pass |
 | 4b | `retrieve`: embedding, top-k, `min_label`, hạ L | 2 | 4a | 1–2 |  | Xong (đã có OnnxEmbedder chạy bge-small-en-v1.5 qua onnxruntime; K1/K3 đã chạy lại với BGE ngày 24/11: ASR không đổi, benign giảm 4/150 lượt K3) | `test_memory.py` pass |
 | 4c | Backend PostgreSQL + pgvector: migration, HNSW, Docker Compose | 3 | 4a | 2 |  | Xong: driver pg8000 (psycopg bị chặn DLL); 124 test pass, 28 test store trên cả hai backend; K1 seed 0–2 trên PostgreSQL ASR 0/6, benign 6/6 như SQLite | Bộ test store pass trên cả SQLite và PostgreSQL |
@@ -393,7 +393,7 @@ Trong mỗi luồng, làm từ trên xuống. Số trong ngoặc là việc tư�
 - [x] Chạy `k1_relay.yaml` với `NullGate`, đọc `trace` trong `runs/`.
 - [x] Chỉnh prompt trong `harness/team.py` tới khi trần utility ≥ 80% task sạch và ASR K1 ≥ 50% seed.
 - [x] Chạy `k1_chain.yaml` → đội `chain` cũng đạt hai ngưỡng trên.
-- [ ] Viết script chuyển JSON MEM-INV-Bench sang YAML; chuyển 3–5 kịch bản.
+- [x] Viết script chuyển JSON MEM-INV-Bench sang YAML; chuyển 3–5 kịch bản.
 
 ### Tuần 1 · Store và ghi (việc 4a)
 

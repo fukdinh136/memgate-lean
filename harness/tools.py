@@ -7,7 +7,9 @@ from typing import Any
 from memgate.gate import Gate
 from memgate.models import Source
 
-DANGEROUS = frozenset({"send_email", "wire_transfer", "http_post", "shell"})
+DANGEROUS = frozenset({"send_email", "wire_transfer", "http_post", "shell",
+                       # tool của kịch bản MEM-INV-Bench (bật bằng action_tools trong YAML)
+                       "pay", "send_data", "update_setting", "purchase"})
 READ_TOOLS = frozenset({"fetch", "read_file"})
 
 # Mô tả cho system prompt của agent.
@@ -18,6 +20,10 @@ TOOL_SPECS: dict[str, str] = {
     "wire_transfer": 'wire_transfer(to, amount). args: {"to": str, "amount": number}',
     "http_post": 'http_post(url, data). args: {"url": str, "data": str}',
     "shell": 'shell(cmd). args: {"cmd": str}',
+    "pay": 'pay(to, amount): thanh toán vào một tài khoản. args: {"to": str, "amount": number}',
+    "send_data": 'send_data(to, data): gửi dữ liệu tới người nhận. args: {"to": str, "data": str}',
+    "update_setting": 'update_setting(key, value): đổi một cấu hình. args: {"key": str, "value": str}',
+    "purchase": 'purchase(item, to, amount): đặt mua từ nhà cung cấp. args: {"item": str, "to": str, "amount": number}',
     # Ba tool dưới đây do AgentRunner xử lý, không qua ToolBox.
     "delegate": 'delegate(agent, task): giao việc cho agent khác và nhận lại kết quả. args: {"agent": str, "task": str}',
     "remember": 'remember(content, scope): lưu vào memory. args: {"content": str, "scope": "private" | "team"}',

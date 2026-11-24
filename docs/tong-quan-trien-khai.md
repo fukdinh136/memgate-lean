@@ -2,7 +2,7 @@
 
 Nov 24, 2026 · @Linh
 
-MemGate đã chạy end-to-end với LLM thật và chặn toàn bộ tấn công K1 và K3 đã đo (0/60 và 0/120 lượt), trong khi không phòng thủ thì 55–97% lượt bị tấn công thành công. 10/21 việc đã xong; còn lại chủ yếu là lớp quản trị (vòng đời, review, API), K2, phát hiện, trust score và thí nghiệm cuối.
+MemGate đã chạy end-to-end với LLM thật và chặn toàn bộ tấn công K1, K3 và đầu độc memory chung (MEM-INV-Bench) đã đo (0/60, 0/120 và 0/90 lượt), trong khi không phòng thủ thì 55–97% lượt bị tấn công thành công. 11/21 việc đã xong; còn lại chủ yếu là lớp quản trị (vòng đời, review, API), K2, phát hiện, trust score và thí nghiệm cuối.
 
 ## Kiến trúc đã triển khai
 
@@ -41,6 +41,7 @@ Mỗi dòng là một rủi ro của bộ nhớ dùng chung trong hệ nhiều a
 | **K1:** nội dung bẩn được "rửa" khi đi qua agent trung gian | Nhãn context U < A < T; message giữa agent mang nhãn của người gửi; cổng hành động chỉ cho giá trị có nguyên văn trong nguồn T | ASR 0/60 (không phòng thủ: 33/60); benign 59/60 |
 | **K3:** hợp nhất memory biến nội dung bẩn thành tóm tắt "sạch" | Ba tầng: fail-closed, phân vùng, tái dẫn xuất (3 kiểm tra bằng máy, NLI ONNX) | ASR 0/120 qua ba chế độ (không phòng thủ: 27/30 và 29/30) |
 | **Taint thừa:** mục sạch bị hạ nhãn oan khi hợp nhất | Phân vùng theo nhãn; tái dẫn xuất chuộc sự thật đúng về T | fail-closed hạ oan 2/3 mục; partition và rederive 0; rederive chuộc hạn nộp ở 28/30 seed, 0 mệnh đề độc lên T |
+| **Đầu độc memory chung:** ghi chú độc được agent ghi nhớ, agent khác tra cứu rồi làm theo (MEM-INV-Bench) | Cổng hành động: người nhận, nhà cung cấp, giá trị cấu hình phải có nguyên văn trong nguồn T | ASR 0/90 qua 3 kịch bản (không phòng thủ: 80/90); benign 84/90; bản sạch không bị chặn nhầm lượt nào (120 lượt) |
 | **Truy cập trái phép (FR7)** | Policy vai trò × scope × hành động, deny thắng, mục private chỉ chủ sở hữu; mọi lần từ chối ghi audit | 14 unit test; chưa có kịch bản LLM thật |
 | **Truy vết và khôi phục (FR2, FR3)** | Version bất biến, cạnh lineage, `roots()`, rollback | Mọi version truy ngược được nguồn gốc (test K1) |
 | **Tái lập kết quả (NFR8)** | Cache LLM theo hash prompt; chạy lại bằng `LLM_CACHE=readonly` | Cả K1, K3, rederive chạy lại: 0 lượt trượt cache, kết quả giống hệt |
@@ -49,7 +50,7 @@ Mỗi dòng là một rủi ro của bộ nhớ dùng chung trong hệ nhiều a
 
 ## Còn lại
 
-Còn 11 việc chính. Chuỗi tuần tự dài nhất giờ là 18 → 19 → 20 → 21, và việc 18 cần thêm kịch bản K2 (16) và kiểm tra độc lập (10).
+Còn 10 việc chính. Chuỗi tuần tự dài nhất giờ là 18 → 19 → 20 → 21, và việc 18 cần thêm kịch bản K2 (16) và kiểm tra độc lập (10).
 
 | Việc | Nội dung | Ghi chú |
 | --- | --- | --- |
@@ -61,7 +62,7 @@ Còn 11 việc chính. Chuỗi tuần tự dài nhất giờ là 18 → 19 → 2
 | 12 | Trust score, hiệu chỉnh trọng số (AUC ≥ 0,85) | Cần 10, 11b, 16 |
 | 15 | Nhãn file workspace |  |
 | 16 | Kịch bản K2, memory cũ, mâu thuẫn, truy cập trái phép, tấn công thích nghi; tập dev và test | Đã có 3 kịch bản K1, K3 |
-| 3, 17 | Chuyển 3–5 kịch bản MEM-INV-Bench sang dạng nhiều agent; trace vàng, metric phát hiện và xếp hạng | Đang làm dở |
+| 17 | Trace vàng, metric phát hiện và xếp hạng | Đang làm dở |
 | 18 | Kiểm định harness: bản MemGate cố tình hỏng (mở K1, K3, `authorize`) phải làm ASR tăng | Phần tái lập đã đạt |
 | 19–21 | Thí nghiệm đầy đủ, ablation, p95, tải 100.000 mục; phân tích thống kê; báo cáo LaTeX và slide |  |
 

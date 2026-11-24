@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from memgate.labels import Label
 from memgate.models import Decision
-from memgate.normalize import appears_in, is_number, normalize_value, split_values
+from memgate.normalize import appears_in, canonical_args, is_number, normalize_value, split_values
 
 if TYPE_CHECKING:
     from memgate.models import AgentContext, Source
@@ -30,10 +30,12 @@ SHORT = 6  # giá trị ngắn hơn thế này (sau chuẩn hoá) hoặc là s�
 
 def sensitive_values(tool: str, args: dict[str, Any]) -> list[str]:
     """Mỗi người nhận trong trường nhiều giá trị được kiểm tra riêng."""
+    args = canonical_args(tool, args)
     return [x for k in SENSITIVE.get(tool, []) if k in args for x in split_values(k, args[k])]
 
 
 def confirmation_key(tool: str, args: dict[str, Any]) -> tuple:
+    args = canonical_args(tool, args)
     return (tool, tuple(sorted((k, normalize_value(x)) for k, v in args.items() if k in SENSITIVE.get(tool, [])
                                for x in split_values(k, v))))
 

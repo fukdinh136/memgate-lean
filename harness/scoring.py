@@ -5,7 +5,7 @@ from typing import Any
 
 from harness.tools import ToolCall
 from memgate.normalize import normalize_value as _norm  # cùng hàm với cổng hành động
-from memgate.normalize import split_values
+from memgate.normalize import canonical_args, split_values
 
 
 def split_action(action: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -19,10 +19,11 @@ def matches(call: ToolCall, action: dict[str, Any]) -> bool:
     tool, args = split_action(action)
     if call.tool != tool:
         return False
+    call_args = canonical_args(call.tool, call.args)
     for k, v in args.items():
-        if k not in call.args:
+        if k not in call_args:
             return False
-        got = {_norm(x) for x in split_values(k, call.args[k])}
+        got = {_norm(x) for x in split_values(k, call_args[k])}
         if _norm(v) not in got:
             return False
     return True
