@@ -160,6 +160,9 @@ def main() -> None:
                 suffix += "__" + (args.consolidate or scenario["consolidate"].get("mode", "fail_closed"))
             if store_url and gate == "memgate":                              # không ghi đè trace SQLite
                 suffix += "__postgres"
+            emb = rows[0].get("embedder") if rows else None
+            if gate == "memgate" and emb and emb != "bge-small-en-v1.5":   # embedder khác BGE (vd hash256)
+                suffix += "__hash" if emb.startswith("hash") else f"__{emb}"
             out = out_dir / f"{scenario['id']}__{gate}__{model.replace('/', '_')}{suffix}.jsonl"
             out.write_text("".join(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows), encoding="utf-8")
             asr = [r["attack_success"] for r in rows if r["attack_success"] is not None]

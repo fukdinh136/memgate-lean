@@ -245,3 +245,81 @@ def test_openrouter_error_in_200_body_and_missing_key(monkeypatch, tmp_path):
         llm.chat("m", [{"role": "user", "content": "x"}])
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     assert llm.chat("m", [{"role": "user", "content": "x"}]) == "ok"   # 502 trong body được thử lại
+
+
+# ---------- nhiều API key ----------
+
+class _Err(Exception):
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+def _pool_llm(tmp_path, keys, behaviour, rpm=None):
+    clk, used = FakeClock(), []
+
+    def call(model, messages, params, api_key=None):
+        used.append(api_key)
+        return behaviour(api_key, len(used))
+
+    llm = LLM(cache_path=tmp_path / "c.sqlite", mode="off", call_fn=call, keys=keys, rpm=rpm,
+              sleep=clk.sleep, clock=clk.now)
+    return llm, used, clk
+
+
+def test_keys_rotate_round_robin(tmp_path):
+    llm, used, _ = _pool_llm(tmp_path, ["k1", "k2", "k3"], lambda k, n: {"text": k, "usage": {}})
+    assert [llm.chat("m", [{"role": "user", "content": str(i)}]) for i in range(4)] == ["k1", "k2", "k3", "k1"]
+
+
+def test_daily_quota_key_is_skipped_without_sleeping(tmp_path):
+    def b(k, n):
+        if k == "k1":
+            raise _Err(429, "429 RESOURCE_EXHAUSTED. Please retry in 17957s.")
+        return {"text": k, "usage": {}}
+    llm, used, clk = _pool_llm(tmp_path, ["k1", "k2"], b)
+    assert llm.chat("m", [{"role": "user", "content": "a"}]) == "k2"
+    assert llm.chat("m", [{"role": "user", "content": "b"}]) == "k2"     # k1 đang nghỉ, không thử lại
+    assert used == ["k1", "k2", "k2"] and clk.slept == []
+
+
+def test_403_key_removed_and_all_dead_raises(tmp_path):
+    def b(k, n):
+        raise _Err(403, "403 PERMISSION_DENIED. The Gemini API free tier is not available for this project.")
+    llm, used, _ = _pool_llm(tmp_path, ["k1", "k2"], b)
+    with pytest.raises(RuntimeError, match="không dùng được"):
+        llm.chat("m", [{"role": "user", "content": "x"}])
+    assert used == ["k1", "k2"]
+
+
+def test_sleeps_only_when_every_key_rests(tmp_path):
+    def b(k, n):
+        if n <= 2:
+            raise _Err(429, "429 RESOURCE_EXHAUSTED. Please retry in 29s.")
+        return {"text": k, "usage": {}}
+    llm, used, clk = _pool_llm(tmp_path, ["k1", "k2"], b)
+    assert llm.chat("m", [{"role": "user", "content": "x"}]) == "k1"
+    assert len(clk.slept) == 1 and 29 <= clk.slept[0] <= 31
+
+
+def test_per_key_rpm_multiplies_throughput(tmp_path):
+    llm, used, clk = _pool_llm(tmp_path, ["k1", "k2"], lambda k, n: {"text": k, "usage": {}}, rpm=2)
+    for i in range(4):
+        llm.chat("m", [{"role": "user", "content": str(i)}])
+    assert clk.slept == [] and sorted(used) == ["k1", "k1", "k2", "k2"]   # 4 lời gọi/phút với 2 key x rpm 2
+    llm.chat("m", [{"role": "user", "content": "5"}])
+    assert len(clk.slept) == 1                                             # lời gọi thứ 5 phải chờ
+
+
+def test_load_keys_from_file_and_env(tmp_path, monkeypatch):
+    from harness.llm import load_keys
+    f = tmp_path / "keys.txt"
+    f.write_text("# ghi chú\nAIzaA\n\nAIzaB  # key 2\nAIzaA\n", encoding="utf-8")
+    monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
+    monkeypatch.setenv("MEMGATE_KEYS_FILE", str(f))
+    assert load_keys("gemini") == ["AIzaA", "AIzaB"]
+    monkeypatch.setenv("GEMINI_API_KEYS", "x1, x2")
+    assert load_keys("gemini") == ["x1", "x2"]
+    monkeypatch.delenv("GEMINI_API_KEYS")
+    monkeypatch.setenv("MEMGATE_KEYS_FILE", str(tmp_path / "khong_co.txt"))
+    assert load_keys("gemini") is None

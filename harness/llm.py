@@ -54,10 +54,17 @@ class LLMCache:
 
 # Client SDK được tạo một lần và giữ lại: tạo rồi bỏ ngay (Client().x.y(...)) khiến
 # google-genai đóng kết nối trước khi gửi request; giữ lại cũng tái dùng kết nối HTTP.
-_CLIENTS: dict[str, Any] = {}
+_CLIENTS: dict[Any, Any] = {}
 
 
-def _client(provider: str) -> Any:
+def _client(provider: str, api_key: str | None = None) -> Any:
+    """Một client cho mỗi (provider, key). Không có key: SDK tự đọc biến môi trường như trước."""
+    if (provider, api_key) in _CLIENTS:
+        return _CLIENTS[(provider, api_key)]
+    if provider == "gemini" and api_key:
+        from google import genai
+        _CLIENTS[(provider, api_key)] = genai.Client(api_key=api_key)
+        return _CLIENTS[(provider, api_key)]
     if provider not in _CLIENTS:
         if provider == "gemini":
             from google import genai  # pip install google-genai; key trong GEMINI_API_KEY
@@ -112,9 +119,10 @@ def _gemini_request(messages: Messages, params: dict[str, Any]) -> tuple[list[di
     return contents, config
 
 
-def _call_gemini(model: str, messages: Messages, params: dict[str, Any]) -> dict[str, Any]:
+def _call_gemini(model: str, messages: Messages, params: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
     contents, config = _gemini_request(messages, params)
-    resp = _client("gemini").models.generate_content(model=model, contents=contents, config=config)
+    client = _client("gemini", api_key) if api_key else _client("gemini")
+    resp = client.models.generate_content(model=model, contents=contents, config=config)
     u = resp.usage_metadata
     return {
         "text": resp.text or "",
@@ -145,12 +153,12 @@ def _openrouter_body(model: str, messages: Messages, params: dict[str, Any]) -> 
     return body
 
 
-def _call_openrouter(model: str, messages: Messages, params: dict[str, Any]) -> dict[str, Any]:
+def _call_openrouter(model: str, messages: Messages, params: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
     """OpenRouter qua urllib của thư viện chuẩn (không cần SDK, không có DLL). Key: OPENROUTER_API_KEY."""
     import urllib.error
     import urllib.request
 
-    key = os.environ.get("OPENROUTER_API_KEY")
+    key = api_key or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("Chưa đặt OPENROUTER_API_KEY (set OPENROUTER_API_KEY=... trong cửa sổ cmd)")
     req = urllib.request.Request(
@@ -181,6 +189,78 @@ PROVIDERS: dict[str, CallFn] = {
 }
 
 
+# ---------- nhiều API key: tự xoay vòng, bỏ qua key hết quota ----------
+
+KEY_ENV = {"gemini": "GEMINI_API_KEYS", "openrouter": "OPENROUTER_API_KEYS"}
+KEY_FILE = {"gemini": "secrets/gemini_keys.txt", "openrouter": "secrets/openrouter_keys.txt"}
+DAILY_QUOTA_WAIT = 300   # 429 bảo chờ lâu hơn thế này: coi là hết quota ngày
+
+
+def load_keys(provider: str) -> list[str] | None:
+    """Key lấy từ biến <PROVIDER>_API_KEYS (phân cách bằng dấu phẩy) hoặc file secrets/<provider>_keys.txt
+    (mỗi dòng một key, # là ghi chú). Không có thì None: SDK tự đọc GEMINI_API_KEY như trước."""
+    raw = os.environ.get(KEY_ENV.get(provider, ""), "")
+    keys = [k for k in raw.split(",") if k.strip()]
+    path = Path(os.environ.get("MEMGATE_KEYS_FILE", KEY_FILE.get(provider, "")))
+    if not keys and path.name and path.is_file():
+        keys = [ln.split("#", 1)[0] for ln in path.read_text(encoding="utf-8").splitlines()]
+    keys = list(dict.fromkeys(k.strip() for k in keys if k.strip()))
+    return keys or None
+
+
+class KeyPool:
+    """Xoay vòng key. Mỗi key có giới hạn rpm riêng; key bị 429 thì nghỉ tới khi server cho phép;
+    key không dùng được (403 free tier, key sai) bị loại cho tới hết lần chạy."""
+
+    def __init__(self, keys: list[str], rpm: int | None, clock: Callable[[], float]) -> None:
+        self.keys, self.rpm, self._clock = list(keys), rpm, clock
+        self.rest_until = {k: 0.0 for k in self.keys}
+        self.recent: dict[str, deque[float]] = {k: deque() for k in self.keys}
+        self.dead: set[str] = set()
+        self._i = 0
+
+    def label(self, key: str) -> str:
+        return f"key #{self.keys.index(key) + 1} (…{key[-4:]})"
+
+    def _free_at(self, key: str, now: float) -> float:
+        q = self.recent[key]
+        while q and now - q[0] >= 60:
+            q.popleft()
+        slot = q[0] + 60 if self.rpm and len(q) >= self.rpm else now
+        return max(self.rest_until[key], slot)
+
+    def acquire(self) -> tuple[str | None, float]:
+        """(key dùng được ngay, 0) hoặc (None, số giây tới lúc có key)."""
+        alive = [k for k in self.keys if k not in self.dead]
+        if not alive:
+            raise RuntimeError("mọi API key đều không dùng được (403/key sai); kiểm tra lại file key")
+        now = self._clock()
+        n = len(self.keys)
+        for j in range(n):
+            k = self.keys[(self._i + j) % n]
+            if k not in self.dead and self._free_at(k, now) <= now:
+                self._i = (self._i + j + 1) % n
+                self.recent[k].append(now)
+                return k, 0.0
+        return None, min(self._free_at(k, now) for k in alive) - now + 0.5
+
+    def rest(self, key: str, seconds: float) -> None:
+        self.rest_until[key] = self._clock() + seconds
+
+    def kill(self, key: str) -> None:
+        self.dead.add(key)
+
+
+def _key_unusable(e: Exception) -> bool:
+    text = str(e)
+    return (status_of(e) in (401, 403) and ("free tier" in text or "PERMISSION_DENIED" in text
+                                            or "API key" in text)) or "API key not valid" in text
+
+
+def _quota_hit(e: Exception) -> bool:
+    return status_of(e) == 429 or "RESOURCE_EXHAUSTED" in str(e)
+
+
 class LLM:
     def __init__(
         self,
@@ -192,6 +272,7 @@ class LLM:
         max_retries: int = 6,           # số lần thử lại khi gặp 429, 5xx hoặc lỗi mạng
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        keys: list[str] | None = None,   # nhiều API key; None: đọc theo load_keys() (khi không có call_fn)
     ) -> None:
         self.rpm, self.max_retries, self._sleep, self._clock = rpm, max_retries, sleep, clock
         self._recent: deque[float] = deque()
@@ -202,6 +283,12 @@ class LLM:
         self.cache = LLMCache(cache_path)
         self._call = call_fn or PROVIDERS[provider]
         self.stats = {"hits": 0, "misses": 0, "input_tokens": 0, "output_tokens": 0, "retries": 0}
+        if keys is None and call_fn is None:
+            keys = load_keys(provider)
+        self.pool = KeyPool(keys, rpm, clock) if keys else None
+        if self.pool and len(self.pool.keys) > 1:
+            print(f"[llm] {len(self.pool.keys)} API key, xoay vòng; mỗi key tối đa {rpm} lời gọi/phút",
+                  file=sys.stderr)
 
     def chat(self, model: str, messages: Messages, **params: Any) -> str:
         key = cache_key(self.provider, model, messages, params)
@@ -236,6 +323,8 @@ class LLM:
         self._recent.append(self._clock())
 
     def _call_with_limits(self, model: str, messages: Messages, params: dict[str, Any]) -> dict[str, Any]:
+        if self.pool is not None:
+            return self._call_with_pool(model, messages, params)
         for attempt in range(self.max_retries + 1):
             self._wait_for_slot()
             try:
@@ -254,6 +343,41 @@ class LLM:
                       file=sys.stderr)
                 self._sleep(delay)
         raise AssertionError("unreachable")
+
+    def _call_with_pool(self, model: str, messages: Messages, params: dict[str, Any]) -> dict[str, Any]:
+        """Key hết quota thì chuyển ngay sang key khác (không ngủ); chỉ ngủ khi mọi key đang nghỉ.
+        Lỗi 5xx/mạng: thử lại như cũ, tối đa max_retries lần."""
+        pool, attempt = self.pool, 0
+        while True:
+            key, wait = pool.acquire()
+            if key is None:
+                print(f"[llm] mọi key đang nghỉ, chờ {wait:.0f}s", file=sys.stderr)
+                self._sleep(wait)
+                continue
+            try:
+                return self._call(model, messages, params, api_key=key)
+            except Exception as e:  # noqa: BLE001
+                if _key_unusable(e):
+                    pool.kill(key)
+                    print(f"[llm] {pool.label(key)} không dùng được ({status_of(e)}), bỏ khỏi pool", file=sys.stderr)
+                    continue
+                if _quota_hit(e):
+                    delay = retry_delay(e) or 60
+                    pool.rest(key, delay)
+                    self.stats["retries"] += 1
+                    kind = "hết quota ngày" if delay > DAILY_QUOTA_WAIT else "429"
+                    print(f"[llm] {pool.label(key)} {kind}, nghỉ {delay:.0f}s, chuyển key khác", file=sys.stderr)
+                    continue
+                if not is_retryable(e) or attempt == self.max_retries:
+                    raise
+                attempt += 1
+                self.stats["retries"] += 1
+                if is_transient_network(e):
+                    _CLIENTS.clear()
+                delay = min(2 ** (attempt - 1) * 5, 60)
+                print(f"[llm] {status_of(e) or type(e).__name__}, chờ {delay:.0f}s rồi thử lại "
+                      f"({attempt}/{self.max_retries})", file=sys.stderr)
+                self._sleep(delay)
 
 
 RETRYABLE = {429, 500, 502, 503, 504}

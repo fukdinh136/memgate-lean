@@ -5,6 +5,7 @@ llm:
   # parse lỗi nhiều, tấn công không còn sống, bộ hợp nhất từ chối tóm tắt -> không dùng làm model chính.
   temperature: 0           # để trống nếu model không nhận temperature
   cache_path: .cache/llm.sqlite
+  # Nhiều API key: secrets/gemini_keys.txt (mỗi dòng một key) hoặc GEMINI_API_KEYS=k1,k2; rpm tính cho từng key
   rpm: 14                   # gói miễn phí Gemini 15 lời gọi/phút; OpenRouter trả phí có thể đặt 60
   # chế độ cache đặt bằng biến môi trường LLM_CACHE=readwrite|readonly|off
 
@@ -14,7 +15,7 @@ experiment:
 
 memgate:
   db_path: .cache/memgate.sqlite
-  embedding_model: BAAI/bge-small-en-v1.5   # hoặc đặt MEMGATE_EMBED_MODEL=<thư mục model trên máy>
+  embedding_model: BAAI/bge-small-en-v1.5   # chạy bằng ONNX (OnnxEmbedder); MEMGATE_EMBED_MODEL=hash để dùng embedding băm
   # Bật/tắt từng biện pháp để ablation (tuần 2)
   mitigations:
     action_gate: true
