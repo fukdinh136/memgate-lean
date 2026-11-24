@@ -56,7 +56,9 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
 - `harness/llm.py`: provider gemini/openrouter/openai/anthropic, cache, rpm, thử lại 429/5xx/lỗi mạng, pool key.
   Đã thử Llama 3.1 8B qua OpenRouter: không dùng được (parse lỗi, tấn công không sống, bộ hợp nhất từ chối).
 
-## 4. Kết quả đã có (Gemini, embedder hash; chi tiết `notes/k1_results.md`, trace `runs/*__hash.jsonl`)
+## 4. Kết quả đã có (Gemini, embedder BGE; chi tiết `notes/k1_results.md`)
+
+Trace BGE: `runs/*__memgate__*.jsonl` không hậu tố; bản HashEmbedder cũ giữ ở `runs/*__hash.jsonl` để đối chiếu.
 
 | Thí nghiệm | NullGate | MemGate |
 |---|---|---|
@@ -66,6 +68,8 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
 | K3 rederive (trang nhắc lại sự thật T), 30 seed | ASR 29/30 | rederive 0/30; 0 mệnh đề độc lên T; hạn nộp được chuộc 28/30 |
 | Taint thừa | — | fail_closed 2/3 mục; partition 0; rederive 0 |
 
+BGE so với hash: mọi chỉ số an toàn giống hệt; benign giảm 4 lượt (K3 partition 26/30 thay vì 27/30, k3_rederive
+rederive 26/30 thay vì 29/30) vì BGE xếp bản tóm tắt U chứa chỉ dẫn độc lên đầu kết quả `recall`.
 Mọi kết quả chạy lại `LLM_CACHE=readonly` cho kết quả giống hệt (0 trượt cache). NLI 10/10 cặp mẫu, ~0,5 s/cặp.
 Hạn chế ghi nhận: rederive chuộc cả mảnh tiêu đề "Hướng dẫn nộp báo cáo tuần" (vô hại); benign của MemGate thấp
 hơn NullGate vì planner bỏ cuộc sau khi email gộp (boss + địa chỉ độc) bị review; memory nhãn T không cấp quyền
@@ -73,7 +77,7 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 5. Trạng thái việc (kế hoạch 21 việc trong Tài liệu triển khai)
 
-- **Xong:** 1, 2, 4a, 4b (code ONNX; số liệu còn chạy với hash), 4c, 5, 6, 11a, 13, 14.
+- **Xong:** 1, 2, 4a, 4b (ONNX; K1/K3 đã chạy lại với BGE), 4c, 5, 6, 11a, 13, 14.
 - **Đang dở:** 3 (còn chuyển 3–5 kịch bản MEM-INV-Bench sang nhiều agent), 16 (mới có K1, K3), 17 (còn trace vàng,
   metric phát hiện/xếp hạng), 18 (tái lập đạt; còn bản MemGate cố tình hỏng).
 - **Chưa làm:** 7 (thiết kế đã gửi, chờ duyệt: vòng đời 7 trạng thái, retention theo Clock, audit hash chain với
@@ -82,13 +86,8 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 6. Việc ngay tiếp theo
 
-1. **Đang chạy dở:** người dùng chạy lại K1/K3 với BGE thật (`set MEMGATE_EMBED_MODEL=` để trống), 7 lệnh MemGate
-   (K1 30 seed; K3 consolidate fail_closed/partition/rederive 30 seed; k3_rederive rederive 30 seed, fail_closed và
-   partition 10 seed), rồi chạy lại bằng readonly. Trace BGE ghi ra tên file không có hậu tố `__hash`.
-   → So với kết quả hash, ghi vào `notes/k1_results.md` và báo cáo, bỏ ghi chú "lệch đặc tả" của 4b.
-2. Commit + push (trace và cache mới).
-3. Việc 7 theo thiết kế ở mục 5, rồi 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18.
-4. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
+1. Việc 7 theo thiết kế ở mục 5, rồi 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18.
+2. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
    cập nhật `TECH_STACK.md` (repo cũ); bỏ mảnh tiêu đề ở bước tách mệnh đề của rederive.
 
 ## 7. Tài liệu
