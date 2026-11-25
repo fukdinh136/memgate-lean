@@ -20,6 +20,7 @@ from harness.scoring import attack_succeeded, benign_completed
 from harness.team import ACTION_TOOLS, TEAMS
 from harness.tools import ToolBox
 from memgate import MemGate, NullGate
+from memgate.mitigations import Mitigations, parse_overrides
 from memgate.store import open_store
 
 GATES = {"null": NullGate, "memgate": MemGate}
@@ -43,11 +44,22 @@ def _shared_nli(factory):
     return _NLI["nli"]
 
 
-def make_gate(name: str, store_url: str | None = None):
-    """store_url = None: SQLite trong bộ nhớ. PostgreSQL: mỗi lượt một schema tạm, xoá khi xong."""
-    if name == "memgate" and store_url:
-        return MemGate(store=open_store(store_url, temp=True))
-    return GATES[name]()
+GATE_KEYS = ("mitigations", "retention_days", "worker")   # embedding_model: chọn bằng MEMGATE_EMBED_MODEL
+
+
+def make_gate(name: str, store_url: str | None = None, gate_config: dict | None = None):
+    """store_url = None: SQLite trong bộ nhớ. PostgreSQL: mỗi lượt một schema tạm, xoá khi xong.
+    gate_config: các khoá GATE_KEYS của mục memgate trong config (vd mitigations.boundary_labeling=False)."""
+    if name != "memgate":
+        return GATES[name]()
+    store = open_store(store_url, temp=True) if store_url else None
+    return MemGate(store=store, config=gate_config or None)
+
+
+def mitigation_suffix(mitigations: dict | None) -> str:
+    """Hậu tố tên trace cho cờ khác mặc định: boundary_labeling tắt -> "__no-boundary_labeling"."""
+    diff = Mitigations.from_config(mitigations).off_by_default()
+    return "".join(f"__{'' if v else 'no-'}{k}" for k, v in sorted(diff.items()))
 
 
 def build_team(scenario: dict) -> dict:
@@ -90,9 +102,10 @@ def build_task(scenario: dict) -> str:
 
 
 def run_scenario(scenario: dict, gate_name: str, llm: Any, model: str, params: dict | None = None,
-                 store_url: str | None = None, consolidate_mode: str | None = None, nli: Any = None) -> dict:
+                 store_url: str | None = None, consolidate_mode: str | None = None, nli: Any = None,
+                 gate_config: dict | None = None) -> dict:
     """Session a (tuỳ chọn): nạp memory. Hợp nhất (tuỳ chọn, K3). Session b: task chính, chấm điểm."""
-    gate = make_gate(gate_name, store_url)
+    gate = make_gate(gate_name, store_url, gate_config)
     try:
         return _run(scenario, gate, gate_name, llm, model, params, store_url, consolidate_mode, nli)
     finally:
@@ -137,6 +150,7 @@ def _run(scenario: dict, gate: Any, gate_name: str, llm: Any, model: str, params
         "seed": (params or {}).get("seed"),
         "embedder": getattr(getattr(gate, "embedder", None), "name", None),
         "store": ("postgres" if store_url else "sqlite") if gate_name == "memgate" else None,
+        "mitigations": getattr(getattr(gate, "mitigations", None), "off_by_default", lambda: None)(),
         "consolidation": consolidation,
         "attack_success": attack_succeeded(session_b, attack) if attack else None,
         "benign_completed": benign_completed(session_b, scenario["benign_action"], result.final),
@@ -162,9 +176,15 @@ def main() -> None:
                    help="chế độ hợp nhất cho kịch bản có bước consolidate (mặc định: theo kịch bản)")
     p.add_argument("--store", choices=["sqlite", "postgres"], default="sqlite",
                    help="postgres: dùng DATABASE_URL (hoặc memgate.db_url trong config), mỗi lượt một schema tạm")
+    p.add_argument("--mitigation", nargs="*", metavar="TEN=on|off",
+                   help="ghi đè công tắc biện pháp của MemGate, vd boundary_labeling=off (TMA-NM)")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
+    mg_cfg = cfg.get("memgate") or {}
+    gate_config = {k: mg_cfg[k] for k in GATE_KEYS if k in mg_cfg}
+    gate_config["mitigations"] = {**(gate_config.get("mitigations") or {}), **parse_overrides(args.mitigation)}
+    Mitigations.from_config(gate_config["mitigations"])  # báo lỗi sớm nếu cờ sai hoặc chưa cài
     llm_cfg = cfg["llm"]
     provider = args.provider or llm_cfg["provider"]
     llm = LLM(provider=provider, cache_path=llm_cfg["cache_path"], rpm=llm_cfg.get("rpm"))
@@ -185,9 +205,10 @@ def main() -> None:
         scenario = load_yaml(path)
         for gate in args.gate:
             base = {"temperature": llm_cfg["temperature"]} if llm_cfg.get("temperature") is not None else {}
-            rows = [run_scenario(scenario, gate, llm, model, {**base, "seed": s}, store_url, args.consolidate)
-                    for s in seeds]
-            suffix = ""
+            gc = gate_config if gate == "memgate" else None
+            rows = [run_scenario(scenario, gate, llm, model, {**base, "seed": s}, store_url, args.consolidate,
+                                 gate_config=gc) for s in seeds]
+            suffix = mitigation_suffix(gc["mitigations"]) if gc else ""
             if scenario.get("consolidate") and gate == "memgate":          # mỗi chế độ hợp nhất một file
                 suffix += "__" + (args.consolidate or scenario["consolidate"].get("mode", "fail_closed"))
             if store_url and gate == "memgate":                              # không ghi đè trace SQLite

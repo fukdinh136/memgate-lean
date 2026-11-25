@@ -29,7 +29,7 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   set LLM_CACHE=readwrite
   set MEMGATE_EMBED_MODEL=          :: để trống = BGE (mặc định); =hash để dùng embedding băm
   ```
-- `python -m pytest -q` phải ra **196 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
+- `python -m pytest -q` phải ra **241 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
 - LLM: Gemini `gemini-3.5-flash-lite` (config `configs/default.yaml`), cache SQLite `.cache/llm.sqlite` (có trong git).
   Gói miễn phí ~500 lời gọi/ngày/project, reset 15:00 giờ VN. Nhiều key: `secrets/gemini_keys.txt` (mỗi dòng
   một key, mỗi key một project), `harness/llm.py` tự xoay vòng, bỏ qua key hết quota/403.
@@ -43,9 +43,14 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
 - `memgate/action_gate.py`: cổng hành động 4 luật (L ≥ A → allow; mọi giá trị nhạy cảm có nguyên văn trong nguồn T,
   giá trị số/ngắn phải cùng một nguồn T; người dùng xác nhận; còn lại review). `normalize.py` dùng chung với scorer.
 - `memgate/policy.py` + `configs/policy.yaml`: Role/Agent/Policy theo đặc tả, deny thắng, mặc định deny, mục private
-  chỉ chủ sở hữu. Lưu vào bảng `roles/agents/policies`; mọi từ chối ghi `audit_events` (chưa hash chain).
+  chỉ chủ sở hữu. Lưu vào bảng `roles/agents/policies`; mọi từ chối ghi `audit_events`.
+- Việc 7 (`notes/lifecycle_audit.md`): `lifecycle.py` (7 trạng thái, mục mới pending + job `embed` trong bảng `jobs`,
+  worker inline `process_pending`, retention `sweep_expired`); `audit.py` (hash chain, `python -m memgate.audit
+  verify|rehash --store URL`); `redact.py` (detect-secrets, mọi chỗ ghi xuống store); `mitigations.py` (công tắc
+  ablation; `run.py --mitigation boundary_labeling=off`, trace thêm hậu tố `__no-boundary_labeling`).
+  Retention trong `configs/default.yaml` là GIÁ TRỊ TẠM, chờ bảng mục 6 của đặc tả.
 - `memgate/store/`: interface `Store`; `sqlite.py` và `postgres.py` (pgvector, HNSW cho BGE 384 chiều, schema tạm
-  mỗi lượt). Migration `memgate/store/migrations/001_init.sql`. `nearest()` = top-k cosine (numpy / `<=>`).
+  mỗi lượt). Migration `memgate/store/migrations/001_init.sql`, `002_jobs.sql`. `nearest()` = top-k cosine (numpy / `<=>`).
 - `memgate/consolidate.py`: hợp nhất `fail_closed`, `partition`, `rederive` (tái dẫn xuất: tách mệnh đề, trích bằng
   chứng chỉ từ input T, 3 kiểm tra bằng máy: khớp nguyên văn, NLI, giá trị nhạy cảm; qua → mục T mới).
 - `memgate/nli.py` (`OnnxNLI`, model `MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli`, có tiếng Việt),
@@ -66,6 +71,7 @@ Trace BGE: `runs/*__memgate__*.jsonl` không hậu tố; bản HashEmbedder cũ 
 | Baseline MEM-INV-Bench | ASR 143/145 | — |
 | MEM-INV nhiều agent (memory chung), 3 kịch bản × 30 seed | ASR 80/90 | ASR 0/90, benign 84/90; bản sạch 90/90 |
 | K1 relay + chain, 30 seed mỗi kịch bản | ASR 33/60 | ASR 0/60, benign 59/60 |
+| TMA-NM (MemGate tắt `boundary_labeling`), K1 / MEM-INV | — | K1 ASR 33/60 (y hệt NullGate); MEM-INV 0/90 |
 | K3 consolidate, 30 seed | ASR 27/30 | fail_closed 0/30, partition 0/30, rederive 0/30 |
 | K3 rederive (trang nhắc lại sự thật T), 30 seed | ASR 29/30 | rederive 0/30; 0 mệnh đề độc lên T; hạn nộp được chuộc 28/30 |
 | Taint thừa | — | fail_closed 2/3 mục; partition 0; rederive 0 |
@@ -79,16 +85,16 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 5. Trạng thái việc (kế hoạch 21 việc trong Tài liệu triển khai)
 
-- **Xong:** 1, 2, 3 (`notes/meminv_multiagent.md`), 4a, 4b (ONNX; K1/K3 đã chạy lại với BGE), 4c, 5, 6, 11a, 13, 14.
+- **Xong:** 1, 2, 3 (`notes/meminv_multiagent.md`), 4a, 4b (ONNX; K1/K3 đã chạy lại với BGE), 4c, 5, 6,
+  7 (`notes/lifecycle_audit.md`), 11a, 13, 14.
 - **Đang dở:** 16 (mới có K1, K3), 17 (còn trace vàng,
   metric phát hiện/xếp hạng), 18 (tái lập đạt; còn bản MemGate cố tình hỏng).
-- **Chưa làm:** 7 (thiết kế đã gửi, chờ duyệt: vòng đời 7 trạng thái, retention theo Clock, audit hash chain với
-  khoá ghi, redact bằng detect-secrets, công tắc `mitigations` + ablation `boundary_labeling=off`), 8, 9, 10, 11b,
-  12, 15, 19, 20, 21.
+- **Chưa làm:** 8 (hàng đợi review; gồm quét quarantine quá 30 ngày -> rejected, cờ `human_review`), 9 (worker
+  nền thay `process_pending` inline), 10, 11b (cờ `validation`, `quarantine`), 12, 15, 19, 20, 21.
 
 ## 6. Việc ngay tiếp theo
 
-1. Việc 7 theo thiết kế ở mục 5, rồi 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18.
+1. Việc 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18. Lấy bảng retention ở mục 6 của đặc tả thay giá trị tạm.
 2. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
    cập nhật `TECH_STACK.md` (repo cũ); bỏ mảnh tiêu đề ở bước tách mệnh đề của rederive.
 
@@ -101,4 +107,4 @@ hành động (cổng chỉ xét nguồn T).
   - Báo cáo kết quả thực nghiệm: https://claude.ai/artifact/KcDJi6hXSNWXNC3DkN4pwA
   - Tổng quan triển khai (sơ đồ): https://claude.ai/artifact/6fdbofsK2LZPTSKuT1K1Kp
 - Trong repo: `notes/baseline.md`, `notes/baseline_results.md`, `notes/k1_results.md` (K1, K3, NLI, rederive),
-  `notes/meminv_multiagent.md` (việc 3).
+  `notes/meminv_multiagent.md` (việc 3), `notes/lifecycle_audit.md` (việc 7).

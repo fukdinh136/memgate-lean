@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 
+from memgate import audit
 from memgate.labels import Label
 from memgate.models import AgentContext, AuditEvent, Edge, MemoryItem, Source, Version
 from memgate.store.base import ReadKind
@@ -75,6 +76,8 @@ class PostgresStore:
                 for stmt in _split_sql(f.read_text(encoding="utf-8")):
                     self._run(stmt)
                 self._run("INSERT INTO schema_version VALUES (:v)", v=ver)
+        if self._one("SELECT 1 AS x FROM audit_events WHERE hash IS NULL LIMIT 1"):
+            self.rehash_audit()     # DB từ trước việc 7: nối chuỗi cho các dòng cũ
 
     def close(self) -> None:
         try:
@@ -191,18 +194,25 @@ class PostgresStore:
 
     _ACTIVE = """FROM items i JOIN versions v ON v.version_id = i.current_version_id
                  WHERE i.status = 'active' AND i.scope = ANY(CAST(:scopes AS TEXT[])) AND v.label >= :ml
-                   AND (i.scope <> 'private' OR i.owner_agent_id = :agent)"""
+                   AND (i.scope <> 'private' OR i.owner_agent_id = :agent)
+                   AND (CAST(:now AS TIMESTAMPTZ) IS NULL OR i.expires_at IS NULL OR i.expires_at > :now)"""
 
     def active_versions(self, scopes: list[str], min_label: Label = Label.U,
-                        agent: str | None = None) -> list[Version]:
+                        agent: str | None = None, now: datetime | None = None) -> list[Version]:
+        """now (khi bật expiration): bỏ mục đã quá expires_at dù worker chưa quét."""
         if not scopes:
             return []
         return [self._version(r) for r in self._rows(
             f"SELECT v.* {self._ACTIVE} ORDER BY v.created_at, v.seq",
-            scopes=list(scopes), ml=int(min_label), agent=agent)]
+            scopes=list(scopes), ml=int(min_label), agent=agent, now=now)]
+
+    def expired_items(self, now: datetime) -> list[str]:
+        return [r["item_id"] for r in self._rows(
+            "SELECT item_id FROM items WHERE status = 'active' AND expires_at IS NOT NULL"
+            " AND expires_at <= :now ORDER BY expires_at, item_id", now=now)]
 
     def nearest(self, model: str, query: np.ndarray, scopes: list[str], min_label: Label = Label.U,
-                agent: str | None = None, k: int = 5) -> list[Version]:
+                agent: str | None = None, k: int = 5, now: datetime | None = None) -> list[Version]:
         """Top-k theo khoảng cách cosine (<=>) trong SQL; chỉ mục đã có embedding của `model`."""
         if not scopes or k <= 0:
             return []
@@ -215,10 +225,11 @@ class PostgresStore:
                f" JOIN embeddings e ON e.model = :model AND e.content_hash = v.content_hash"
                f" WHERE i.status = 'active' AND i.scope = ANY(CAST(:scopes AS TEXT[])) AND v.label >= :ml"
                f"   AND (i.scope <> 'private' OR i.owner_agent_id = :agent)"
+               f"   AND (CAST(:now AS TIMESTAMPTZ) IS NULL OR i.expires_at IS NULL OR i.expires_at > :now)"
                f" ORDER BY {dist}, v.created_at, v.seq LIMIT :k")
         return [self._version(r) for r in self._rows(
             sql, model=model, q=_vec_text(q.tobytes()), scopes=list(scopes), ml=int(min_label),
-            agent=agent, k=int(k))]
+            agent=agent, k=int(k), now=now)]
 
     def get_embeddings(self, model: str, hashes: list[str]) -> dict[str, bytes]:
         if not hashes:
@@ -284,13 +295,47 @@ class PostgresStore:
     # ---------- audit ----------
 
     def append_audit(self, event: AuditEvent) -> AuditEvent:
+        """Nối hash chain. Khoá advisory theo transaction: tiến trình khác chờ tới COMMIT mới đọc hash cuối.
+        seq có thể nhảy cóc (sequence không lùi khi ROLLBACK); verify chỉ đòi seq tăng và prev_hash khớp."""
         with self.transaction():
+            self._run("SELECT pg_advisory_xact_lock(hashtext('memgate_audit'))")
+            last = self._one("SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1")
+            prev = last["hash"] if last else audit.GENESIS
             r = self._one(
-                "INSERT INTO audit_events (ts, actor, op, target, decision, reason, prev_hash, hash)"
-                " VALUES (:ts, :actor, :op, :target, :decision, :reason, :ph, :h) RETURNING seq",
+                "INSERT INTO audit_events (ts, actor, op, target, decision, reason)"
+                " VALUES (:ts, :actor, :op, :target, :decision, :reason) RETURNING seq",
                 ts=event.ts, actor=event.actor, op=event.op, target=event.target, decision=event.decision,
-                reason=event.reason, ph=event.prev_hash, h=event.hash)
-        return event.model_copy(update={"seq": r["seq"]})
+                reason=event.reason)
+            ev = event.model_copy(update={"seq": r["seq"], "prev_hash": prev})
+            ev.hash = audit.event_hash(prev, ev)
+            self._run("UPDATE audit_events SET prev_hash = :p, hash = :h WHERE seq = :s",
+                      p=prev, h=ev.hash, s=ev.seq)
+        return ev
+
+    def rehash_audit(self) -> int:
+        """Nối chuỗi cho DB cũ (trước việc 7). Chỉ chạy khi chưa dòng nào có hash; chuỗi chỉ chứng minh
+        log không bị sửa KỂ TỪ lúc này."""
+        with self.transaction():
+            self._run("SELECT pg_advisory_xact_lock(hashtext('memgate_audit'))")
+            if self._one("SELECT 1 AS x FROM audit_events WHERE hash IS NOT NULL LIMIT 1"):
+                raise RuntimeError("audit đã có hash chain; rehash sẽ che dấu vết sửa log")
+            rows = audit.chain(self.list_audit())
+            for s, prev, h in rows:
+                self._run("UPDATE audit_events SET prev_hash = :p, hash = :h WHERE seq = :s", p=prev, h=h, s=s)
+        return len(rows)
+
+    # ---------- jobs (worker inline, việc 7; chạy nền ở việc 9) ----------
+
+    def add_job(self, job_id: str, kind: str, ref_id: str, created_at: datetime) -> None:
+        self._run("INSERT INTO jobs (job_id, kind, ref_id, status, attempts, created_at)"
+                  " VALUES (:id, :k, :r, 'queued', 0, :at)", id=job_id, k=kind, r=ref_id, at=created_at)
+
+    def queued_jobs(self, limit: int = 100) -> list[dict]:
+        return self._rows("SELECT job_id, kind, ref_id, status, attempts, created_at FROM jobs"
+                          " WHERE status = 'queued' ORDER BY created_at, seq LIMIT :n", n=int(limit))
+
+    def set_job_status(self, job_id: str, status: str) -> None:
+        self._run("UPDATE jobs SET status = :s, attempts = attempts + 1 WHERE job_id = :id", s=status, id=job_id)
 
     def list_audit(self, actor: str | None = None, decision: str | None = None) -> list[AuditEvent]:
         rows = self._rows(

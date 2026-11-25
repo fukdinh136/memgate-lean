@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 
+from memgate import audit
 from memgate.labels import Label
 from memgate.models import AgentContext, AuditEvent, Edge, MemoryItem, Source, Version
 from memgate.store.base import ReadKind
@@ -102,6 +103,15 @@ CREATE TABLE IF NOT EXISTS audit_events (
     prev_hash TEXT,
     hash      TEXT
 );
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id     TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,             -- embed (việc 7); nli, consolidate, ttl ở việc 9
+    ref_id     TEXT NOT NULL,             -- version_id
+    status     TEXT NOT NULL CHECK (status IN ('queued','done','failed')),
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_events(actor, decision);
 CREATE INDEX IF NOT EXISTS idx_versions_item ON versions(item_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_items_status ON items(status, expires_at);
@@ -113,6 +123,14 @@ CREATE INDEX IF NOT EXISTS idx_sources_hash ON sources(content_hash);
 
 def _dt(s: str | None) -> datetime | None:
     return datetime.fromisoformat(s) if s else None
+
+
+def _ts(d: datetime | None) -> str | None:
+    """Mốc thời gian so sánh được dạng chuỗi (expires_at): UTC, luôn đủ micro giây."""
+    if d is None:
+        return None
+    d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    return d.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 class SQLiteStore:
@@ -128,6 +146,8 @@ class SQLiteStore:
             self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
         self._depth = 0
+        if self.conn.execute("SELECT 1 FROM audit_events WHERE hash IS NULL LIMIT 1").fetchone():
+            self.rehash_audit()     # DB từ trước việc 7: nối chuỗi cho các dòng cũ
 
     def close(self) -> None:
         self.conn.close()
@@ -180,7 +200,7 @@ class SQLiteStore:
         self.conn.execute(
             "INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
             (item.item_id, item.type, item.scope, item.owner_agent_id, item.current_version_id,
-             item.status, item.expires_at.isoformat() if item.expires_at else None, item.created_at.isoformat()),
+             item.status, _ts(item.expires_at), item.created_at.isoformat()),
         )
 
     def get_item(self, item_id: str) -> MemoryItem | None:
@@ -229,7 +249,8 @@ class SQLiteStore:
         return [self._version(r) for r in rows]
 
     def active_versions(self, scopes: list[str], min_label: Label = Label.U,
-                        agent: str | None = None) -> list[Version]:
+                        agent: str | None = None, now: datetime | None = None) -> list[Version]:
+        """now (khi bật expiration): bỏ mục đã quá expires_at dù worker chưa quét."""
         if not scopes:
             return []
         q = ",".join("?" * len(scopes))
@@ -237,16 +258,22 @@ class SQLiteStore:
             f"""SELECT v.* FROM items i JOIN versions v ON v.version_id = i.current_version_id
                 WHERE i.status = 'active' AND i.scope IN ({q}) AND v.label >= ?
                   AND (i.scope != 'private' OR i.owner_agent_id = ?)
+                  AND (? IS NULL OR i.expires_at IS NULL OR i.expires_at > ?)
                 ORDER BY v.created_at, v.rowid""",
-            [*scopes, int(min_label), agent])
+            [*scopes, int(min_label), agent, _ts(now), _ts(now)])
         return [self._version(r) for r in rows]
 
+    def expired_items(self, now: datetime) -> list[str]:
+        return [r["item_id"] for r in self.conn.execute(
+            "SELECT item_id FROM items WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?"
+            " ORDER BY expires_at, item_id", (_ts(now),))]
+
     def nearest(self, model: str, query: np.ndarray, scopes: list[str], min_label: Label = Label.U,
-                agent: str | None = None, k: int = 5) -> list[Version]:
+                agent: str | None = None, k: int = 5, now: datetime | None = None) -> list[Version]:
         """Top-k theo cosine bằng numpy; phá hoà theo thứ tự chèn, giống ORDER BY của PostgreSQL."""
         if k <= 0:
             return []
-        cands = self.active_versions(scopes, min_label, agent=agent)
+        cands = self.active_versions(scopes, min_label, agent=agent, now=now)
         have = self.get_embeddings(model, [v.content_hash for v in cands])
         cands = [v for v in cands if v.content_hash in have]
         if not cands:
@@ -321,13 +348,43 @@ class SQLiteStore:
     # ---------- audit ----------
 
     def append_audit(self, event: AuditEvent) -> AuditEvent:
+        """Nối hash chain. BEGIN IMMEDIATE giữ khoá ghi của cả DB từ lúc đọc hash cuối tới COMMIT."""
         with self.transaction():
+            last = self.conn.execute("SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1").fetchone()
+            prev = last["hash"] if last else audit.GENESIS
             cur = self.conn.execute(
-                "INSERT INTO audit_events (ts, actor, op, target, decision, reason, prev_hash, hash)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (event.ts.isoformat(), event.actor, event.op, event.target, event.decision, event.reason,
-                 event.prev_hash, event.hash))
-        return event.model_copy(update={"seq": cur.lastrowid})
+                "INSERT INTO audit_events (ts, actor, op, target, decision, reason) VALUES (?,?,?,?,?,?)",
+                (event.ts.isoformat(), event.actor, event.op, event.target, event.decision, event.reason))
+            ev = event.model_copy(update={"seq": cur.lastrowid, "prev_hash": prev})
+            ev.hash = audit.event_hash(prev, ev)
+            self.conn.execute("UPDATE audit_events SET prev_hash = ?, hash = ? WHERE seq = ?",
+                              (prev, ev.hash, ev.seq))
+        return ev
+
+    def rehash_audit(self) -> int:
+        """Nối chuỗi cho DB cũ (trước việc 7). Chỉ chạy khi chưa dòng nào có hash; chuỗi chỉ chứng minh
+        log không bị sửa KỂ TỪ lúc này."""
+        with self.transaction():
+            if self.conn.execute("SELECT 1 FROM audit_events WHERE hash IS NOT NULL LIMIT 1").fetchone():
+                raise RuntimeError("audit đã có hash chain; rehash sẽ che dấu vết sửa log")
+            rows = audit.chain(self.list_audit())
+            self.conn.executemany("UPDATE audit_events SET prev_hash = ?, hash = ? WHERE seq = ?",
+                                  [(p, h, s) for s, p, h in rows])
+        return len(rows)
+
+    # ---------- jobs (worker inline, việc 7; chạy nền ở việc 9) ----------
+
+    def add_job(self, job_id: str, kind: str, ref_id: str, created_at: datetime) -> None:
+        self.conn.execute("INSERT INTO jobs VALUES (?,?,?,'queued',0,?)",
+                          (job_id, kind, ref_id, created_at.isoformat()))
+
+    def queued_jobs(self, limit: int = 100) -> list[dict]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at, rowid LIMIT ?", (limit,))]
+
+    def set_job_status(self, job_id: str, status: str) -> None:
+        self.conn.execute("UPDATE jobs SET status = ?, attempts = attempts + 1 WHERE job_id = ?",
+                          (status, job_id))
 
     def list_audit(self, actor: str | None = None, decision: str | None = None) -> list[AuditEvent]:
         q, args = "SELECT * FROM audit_events WHERE 1=1", []

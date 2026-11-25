@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 from memgate.labels import Label
-from memgate.models import Edge, MemoryItem, Version
+from memgate.models import Edge, Version
 from memgate.nli import NLI, entails
 from memgate.normalize import appears_in
 from memgate.redact import redact
@@ -103,7 +103,7 @@ def consolidate(gate: "MemGate", scope: str, mode: str, summarize: Summarizer,
         raise ValueError(f"mode không hợp lệ: {mode!r} (chọn {MODES})")
     if scope not in SCOPES:
         raise ValueError(f"chỉ hợp nhất scope {SCOPES}, không hợp nhất {scope!r}")
-    inputs = gate.store.active_versions([scope], Label.U)
+    inputs = gate.store.active_versions([scope], Label.U, now=gate._now_filter())
     result = ConsolidationResult(mode=mode, scope=scope, input_ids=[v.version_id for v in inputs])
     if not inputs:
         return result
@@ -129,24 +129,23 @@ def consolidate(gate: "MemGate", scope: str, mode: str, summarize: Summarizer,
     now = gate.clock.now()
     with gate.store.transaction():
         for (label, vs), text in zip(groups, texts):
-            item = MemoryItem(type="long_term", scope=scope, owner_agent_id=ACTOR, created_at=now)
-            gate.store.create_item(item)
+            item = gate._new_item("long_term", scope, ACTOR)      # pending như mọi mục mới (việc 7)
             out = Version(item_id=item.item_id, content=redact(text), label=label, created_by=ACTOR,
                           created_at=now, reason="consolidate")
-            gate.store.add_version(out, [Edge(child_version_id=out.version_id, parent_kind="version",
-                                              parent_id=v.version_id, relation="derived_from") for v in vs])
+            gate.add_version(out, [Edge(child_version_id=out.version_id, parent_kind="version",
+                                        parent_id=v.version_id, relation="derived_from") for v in vs])
             for v in vs:
-                gate.store.set_item_status(v.item_id, "superseded")
+                gate.transition(v.item_id, "superseded", ACTOR, f"hợp nhất {mode}")
             result.outputs.append(out)
             result.excess_taint += sum(1 for v in vs if v.label > label)
         for claim, src in passed:   # mục MỚI nhãn T, lineage về version T của đoạn trích, không về bản U
-            item = MemoryItem(type="long_term", scope=scope, owner_agent_id=ACTOR, created_at=now)
-            gate.store.create_item(item)
+            item = gate._new_item("long_term", scope, ACTOR)
             new = Version(item_id=item.item_id, content=redact(claim), label=Label.T, created_by=ACTOR,
                           created_at=now, reason="consolidate")
-            gate.store.add_version(new, [Edge(child_version_id=new.version_id, parent_kind="version",
-                                              parent_id=src.version_id, relation="derived_from")])
+            gate.add_version(new, [Edge(child_version_id=new.version_id, parent_kind="version",
+                                        parent_id=src.version_id, relation="derived_from")])
             result.rederived.append(new)
+    gate.run_worker()
     gate._audit(ACTOR, "consolidate", f"scope:{scope}", "allow",
                 f"mode={mode}; inputs={len(inputs)}; outputs={len(result.outputs)}; "
                 f"excess_taint={result.excess_taint}"

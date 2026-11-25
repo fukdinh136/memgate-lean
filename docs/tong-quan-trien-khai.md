@@ -2,7 +2,7 @@
 
 Nov 24, 2026 · @Linh
 
-MemGate đã chạy end-to-end với LLM thật và chặn toàn bộ tấn công K1, K3 và đầu độc memory chung (MEM-INV-Bench) đã đo (0/60, 0/120 và 0/90 lượt), trong khi không phòng thủ thì 55–97% lượt bị tấn công thành công. 11/21 việc đã xong; còn lại chủ yếu là lớp quản trị (vòng đời, review, API), K2, phát hiện, trust score và thí nghiệm cuối.
+MemGate đã chạy end-to-end với LLM thật và chặn toàn bộ tấn công K1, K3 và đầu độc memory chung (MEM-INV-Bench) đã đo (0/60, 0/120 và 0/90 lượt), trong khi không phòng thủ thì 55–97% lượt bị tấn công thành công. 12/21 việc đã xong; còn lại chủ yếu là lớp quản trị (review, API), K2, phát hiện, trust score và thí nghiệm cuối.
 
 ## Kiến trúc đã triển khai
 
@@ -44,19 +44,21 @@ Mỗi dòng là một rủi ro của bộ nhớ dùng chung trong hệ nhiều a
 | **Đầu độc memory chung:** ghi chú độc được agent ghi nhớ, agent khác tra cứu rồi làm theo (MEM-INV-Bench) | Cổng hành động: người nhận, nhà cung cấp, giá trị cấu hình phải có nguyên văn trong nguồn T | ASR 0/90 qua 3 kịch bản (không phòng thủ: 80/90); benign 84/90; bản sạch không bị chặn nhầm lượt nào (120 lượt) |
 | **Truy cập trái phép (FR7)** | Policy vai trò × scope × hành động, deny thắng, mục private chỉ chủ sở hữu; mọi lần từ chối ghi audit | 14 unit test; chưa có kịch bản LLM thật |
 | **Truy vết và khôi phục (FR2, FR3)** | Version bất biến, cạnh lineage, `roots()`, rollback | Mọi version truy ngược được nguồn gốc (test K1) |
+| **Nhãn chỉ theo từng agent (TMA-NM)** | Công tắc boundary\_labeling: tắt thì message giữa agent mang nhãn T (ablation) | Tắt gán nhãn ở ranh giới message thì K1 lọt 33/60, y hệt không phòng thủ; MEM-INV vẫn 0/90 vì đi qua memory |
+| **Log audit bị sửa (NFR4)** | Hash chain, khoá khi ghi (BEGIN IMMEDIATE / pg\_advisory\_xact\_lock), lệnh verify | Phát hiện sửa, xoá, đổi thứ tự dòng; 2 tiến trình × 200 sự kiện không gãy chuỗi trên SQLite và PostgreSQL |
+| **Lộ secret vào memory (NFR7)** | Redact bằng detect-secrets ở mọi chỗ ghi xuống store | Không bảng nào còn secret sau một vòng chạy; 0 lần redact nhầm trên mọi kịch bản và trace |
 | **Tái lập kết quả (NFR8)** | Cache LLM theo hash prompt; chạy lại bằng `LLM_CACHE=readonly` | Cả K1, K3, rederive chạy lại: 0 lượt trượt cache, kết quả giống hệt |
 | **Lưu trữ thật (mục 6)** | PostgreSQL + pgvector, cùng interface với SQLite | 28 test store pass trên cả hai; K1 trên PostgreSQL ra cùng kết quả |
 | **Máy bị chặn DLL** (torch, psycopg) | onnxruntime cho embedding và NLI; `pg8000` thuần Python | NLI đúng 10/10 cặp mẫu, \~0,5 giây/cặp; 164 test pass |
 
 ## Còn lại
 
-Còn 10 việc chính. Chuỗi tuần tự dài nhất giờ là 18 → 19 → 20 → 21, và việc 18 cần thêm kịch bản K2 (16) và kiểm tra độc lập (10).
+Còn 9 việc chính. Chuỗi tuần tự dài nhất giờ là 18 → 19 → 20 → 21, và việc 18 cần thêm kịch bản K2 (16) và kiểm tra độc lập (10).
 
 | Việc | Nội dung | Ghi chú |
 | --- | --- | --- |
-| 7 | Vòng đời 7 trạng thái, retention, audit hash chain, redact bằng detect-secrets, công tắc biện pháp | Thiết kế đã gửi, chờ duyệt; mở được ablation TMA-NM |
-| 8 | Hàng đợi review, reviewer giả lập | Cần việc 7 |
-| 9 | API HTTP (FastAPI), `HttpGate`, worker, đo p95 | Cần việc 7 |
+| 8 | Hàng đợi review, reviewer giả lập | Làm được ngay (việc 7 đã xong) |
+| 9 | API HTTP (FastAPI), `HttpGate`, worker, đo p95 | Làm được ngay (việc 7 đã xong) |
 | 10 | Kiểm tra độc lập K2 theo `roots` và domain |  |
 | 11b | Phát hiện đầu độc, cũ, mâu thuẫn, trái phép | NLI đã sẵn (việc 11a) |
 | 12 | Trust score, hiệu chỉnh trọng số (AUC ≥ 0,85) | Cần 10, 11b, 16 |

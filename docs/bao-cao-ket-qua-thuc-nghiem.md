@@ -11,6 +11,7 @@ MemGate chặn 60/60 lượt tấn công K1 với LLM thật (cận trên 95% c�
 - Baseline MEM-INV-Bench không phòng thủ: ASR 143/145 = 98,6%; task hợp lệ 30/30.
 - K1 nghiệm thu 30 seed mỗi kịch bản: NullGate ASR 33/60 (55%), MemGate ASR 0/60; benign 59/60 ở cả hai gate.
 - MEM-INV-Bench dạng nhiều agent (việc 3), 3 kịch bản × 30 seed: NullGate ASR 80/90; MemGate ASR 0/90, benign 84/90; bản sạch 90/90 ở cả hai gate, không chặn nhầm.
+- Việc 7 (vòng đời, audit hash chain, redact, công tắc biện pháp): verify phát hiện mọi kiểu sửa log đã thử; 2 tiến trình ghi cùng lúc không gãy chuỗi; kết quả K1/K3/MEM-INV không đổi. Tắt gán nhãn ở ranh giới message (TMA-NM) thì K1 lọt 33/60, y hệt không phòng thủ.
 - Embedder: mọi số liệu MemGate đã chạy lại với `bge-small-en-v1.5` (ONNX) đúng đặc tả; ASR không đổi so với embedder băm, benign giảm 4/150 lượt K3.
 
 ## Thiết lập
@@ -85,6 +86,33 @@ Luồng: coder đọc trang ghi chú có đoạn poison nguyên văn của bộ 
 - Tái lập: chạy lại cả 16 ô với `LLM_CACHE=readonly` cho kết quả giống hệt (3452 lượt trúng cache, 0 trượt).
 
 Chi tiết: `notes/meminv_multiagent.md` trong repo.
+
+## Vòng đời, audit, redact và TMA-NM (việc 7)
+
+Nghiệm thu việc 7 đạt: lệnh verify phát hiện log bị sửa, hai tiến trình ghi cùng lúc không gãy chuỗi, và mọi kết quả đã có giữ nguyên. Ablation TMA-NM cho thấy nhãn theo từng agent không đủ chặn K1.
+
+| Hạng mục | Kết quả |
+| --- | --- |
+| Audit hash chain | `python -m memgate.audit verify` báo đúng seq khi sửa một trường, xoá dòng giữa chuỗi, đổi thứ tự hai dòng; 2 tiến trình × 200 sự kiện: đủ 400 dòng, chuỗi nguyên vẹn trên SQLite và PostgreSQL |
+| Vòng đời | 7 trạng thái, mọi lần chuyển ghi audit; mục mới pending tới khi worker inline tính xong embedding; share, cập nhật chỉ với mục active; trạng thái cuối không được hồi sinh |
+| Retention | Hết hạn theo `Clock`, retrieve bỏ mục quá hạn ngay cả khi chưa quét; giá trị hạn là tạm, chờ bảng mục 6 của đặc tả |
+| Redact (detect-secrets) | Không bảng nào còn secret sau khi đi qua observe, write, message, trusted fact, authorize, audit, consolidate; 0 lần redact nhầm trên mọi kịch bản và 2193 đoạn trace; \~1 ms/lần |
+| Hồi quy | Chạy lại readonly K1, K3, MEM-INV: 6568 lượt trúng cache, 0 trượt, trace giống hệt |
+
+TMA-NM (MemGate tắt `boundary_labeling`, 30 seed mỗi kịch bản):
+
+| Kịch bản | NullGate ASR | MemGate ASR | TMA-NM ASR |
+| --- | --- | --- | --- |
+| `k1_relay_email` | 18/30 | 0/30 | 18/30 |
+| `k1_chain_email` | 15/30 | 0/30 | 15/30 |
+| MEM-INV, 3 kịch bản | 80/90 | 0/90 | 0/90 |
+
+- K1: mọi seed giống hệt NullGate. Kết quả coder (đã đọc trang độc) tới planner với nhãn T, nên planner vẫn ở nhãn T và email độc lọt.
+- MEM-INV: kênh tấn công đi qua memory, nên mục do coder ghi vẫn nhãn U và vẫn bị chặn.
+- Baseline việc 2 không đi qua gate nên không chạy TMA-NM; thay bằng K1 và việc 3.
+- Hạn chế: verify không phát hiện việc cắt bỏ các dòng cuối chuỗi (cần neo hash ra ngoài); `content_hash` tính trên bản gốc nên secret ngắn có thể bị dò ngược; detect-secrets bỏ qua mật khẩu viết trong câu văn tự do.
+
+Chi tiết: `notes/lifecycle_audit.md` trong repo.
 
 ## K1 với LLM thật
 
@@ -226,6 +254,7 @@ Backend PostgreSQL chạy được trên máy Windows và cho cùng kết quả 
 | Lượt --store postgres ghi đè trace nghiệm thu 30 seed của MemGate | Tên file trace không phân biệt backend | Thêm hậu tố \_\_postgres; tạo lại trace SQLite 30 seed từ cache (không tốn quota) |
 | Chạy lại từ cache vẫn có 22 lời gọi LLM thật (k1\_chain seed 12, 27) | Tool remember trả mã item sinh ngẫu nhiên vào prompt, nên prompt khác nhau giữa các lần chạy (vi phạm NFR8) | remember chỉ trả "Đã lưu."; thêm test chạy lại với LLM\_CACHE=readonly; chạy lại 120 lượt readonly: 0 trượt cache, kết quả không đổi |
 | CacheMiss ngay ở lần chạy đầu sau khi sửa | Cửa sổ cmd còn LLM\_CACHE=readonly từ trước, nên prompt mới không được gọi LLM | set LLM\_CACHE=readwrite rồi chạy lại |
+| detect-secrets báo mọi từ trong kịch bản là secret (planner, attack, email...) | Hàm scan\_line dành cho quét ad hoc, bỏ qua ngưỡng entropy và bộ lọc | Quét theo dòng có đủ bộ lọc, giả làm file YAML; kiểm lại trên mọi kịch bản và trace: 0 lần nhầm |
 
 ## Việc còn lại
 

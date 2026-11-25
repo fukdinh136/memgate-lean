@@ -1,14 +1,17 @@
-"""MemGate: nhãn context, ghi memory, versioning, lineage (việc 4a). retrieve là việc 4b."""
+"""MemGate: nhãn context, ghi memory, versioning, lineage (việc 4a). retrieve là việc 4b.
+Vòng đời, worker inline, retention, redact, công tắc biện pháp: việc 7."""
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
-from memgate import action_gate
+from memgate import action_gate, lifecycle
 import numpy as np
 
 from memgate.clock import Clock, SystemClock
 from memgate.embed import Embedder, make_embedder
 from memgate.labels import Label, meet, output_label
+from memgate.mitigations import Mitigations
 from memgate.models import AgentContext, AuditEvent, Decision, Edge, MemoryItem, Message, Source, Version
 from memgate.policy import SCOPE_RANK, SCOPES, PolicyDenied, PolicyEngine
 from memgate.redact import redact
@@ -18,6 +21,9 @@ if TYPE_CHECKING:
     from memgate.consolidate import ConsolidationResult, Rederiver, Summarizer
 
 __all__ = ["MemGate", "AgentContext"]
+
+# Retention theo loại memory, đơn vị ngày; None = không hết hạn. GIÁ TRỊ TẠM: chờ bảng ở mục 6 của đặc tả.
+DEFAULT_RETENTION_DAYS = {"short_term": 1, "retrieved": 7, "shared": 30, "long_term": None}
 
 
 class MemGate:
@@ -37,6 +43,11 @@ class MemGate:
         self.policy = policy
         self.embedder = embedder or make_embedder((config or {}).get("embedding_model"))
         self.config = config or {}
+        self.mitigations = Mitigations.from_config(self.config.get("mitigations"))
+        self.retention_days = {**DEFAULT_RETENTION_DAYS, **(self.config.get("retention_days") or {})}
+        self.worker = self.config.get("worker", "inline")
+        if self.worker != "inline":
+            raise NotImplementedError(f"worker {self.worker!r}: chạy nền ở việc 9, hiện chỉ có 'inline'")
         self._contexts: dict[tuple[str, str], AgentContext] = {}
         self._confirmed: set[tuple] = set()  # TODO(việc 8): chuyển sang hàng đợi review
 
@@ -70,8 +81,9 @@ class MemGate:
         self.store.append_context_read(ctx.agent, ctx.session, "version", v.version_id, v.label)
 
     def send_message(self, sender: str, receiver: str, session: str, content: str) -> Message:
-        """Message mang nhãn output của người gửi; người nhận observe nó ngay (chặn K1)."""
-        label = output_label(self.context_label(sender, session))
+        """Message mang nhãn output của người gửi; người nhận observe nó ngay (chặn K1).
+        Tắt mitigations.boundary_labeling (TMA-NM): message mang nhãn T như framework thường làm."""
+        label = output_label(self.context_label(sender, session)) if self.mitigations.boundary_labeling else Label.T
         msg = Message(sender=sender, receiver=receiver, session=session, content=content, label=label)
         self.observe(
             receiver,
@@ -94,13 +106,12 @@ class MemGate:
             if existing is None:
                 raise KeyError(f"item không tồn tại: {item_id}")
             self._enforce(agent, "write", "write", existing.scope, f"item:{item_id}", owner=existing.owner_agent_id)
+            self._require_status(agent, "write", existing, ("active",))
         ctx = self.context(agent, session)
         now = self.clock.now()
         with self.store.transaction():
             if item_id is None:
-                # TODO(việc 7): mục mới ở trạng thái pending tới khi worker tính xong embedding.
-                item = MemoryItem(type=type, scope=scope, owner_agent_id=agent, status="active", created_at=now)
-                self.store.create_item(item)
+                item = self._new_item(type, scope, agent)        # pending tới khi worker tính embedding
             else:
                 item = self.store.get_item(item_id)
                 if item is None:
@@ -111,8 +122,42 @@ class MemGate:
             if item.current_version_id:
                 edges.append(Edge(child_version_id=v.version_id, parent_kind="version",
                                   parent_id=item.current_version_id, relation="derived_from"))
-            self.store.add_version(v, edges)
+            self.add_version(v, edges)
+        self.run_worker()
         return v
+
+    # ---------- vòng đời (việc 7) ----------
+
+    def _new_item(self, type: str, scope: str, owner: str) -> MemoryItem:
+        """Lối tạo mục duy nhất: pending, hạn theo retention (khi bật expiration). Gọi trong transaction."""
+        item = MemoryItem(type=type, scope=scope, owner_agent_id=owner, status="pending",
+                          expires_at=lifecycle.expires_at(self, type), created_at=self.clock.now())
+        self.store.create_item(item)
+        return item
+
+    def add_version(self, v: Version, edges: list[Edge]) -> None:
+        """Ghi version và xếp job embedding cho worker. Gọi trong transaction."""
+        self.store.add_version(v, edges)
+        lifecycle.enqueue_embed(self, v.version_id)
+
+    def run_worker(self) -> int:
+        """Worker inline: xử lý hàng đợi ngay tại chỗ (việc 9 chuyển sang tiến trình nền)."""
+        return lifecycle.process_pending(self)
+
+    def sweep_expired(self) -> list[str]:
+        return lifecycle.sweep_expired(self)
+
+    def transition(self, item_id: str, to: str, actor: str, reason: str = "") -> str:
+        return lifecycle.transition(self, item_id, to, actor, reason)
+
+    def _now_filter(self):
+        """Mốc giờ để store bỏ mục quá hạn chưa được quét; None khi tắt expiration."""
+        return self.clock.now() if self.mitigations.expiration else None
+
+    def _require_status(self, agent: str, op: str, item: MemoryItem, allowed: tuple[str, ...]) -> None:
+        if item.status not in allowed:
+            self._deny(agent, op, f"item:{item.item_id}",
+                       f"trạng thái {item.status}, cần {' hoặc '.join(allowed)}")
 
     def _context_edges(self, ctx: AgentContext, v: Version, agent: str) -> list[Edge]:
         edges = [Edge(child_version_id=v.version_id, parent_kind="source", parent_id=sid,
@@ -131,15 +176,16 @@ class MemGate:
                        type: str = "long_term", kind: str = "user") -> Version:
         """Nạp sự thật từ kênh đã xác thực (trusted_facts của kịch bản) với nhãn T."""
         now = self.clock.now()
-        src = Source(kind=kind, locator=locator, content=redact(content), content_hash=None)
+        src = Source(kind=kind, locator=locator, content=content)   # hash trên nội dung gốc
+        src = src.model_copy(update={"content": redact(content)})
         with self.store.transaction():
             self.store.add_source(src)
-            item = MemoryItem(type=type, scope=scope, owner_agent_id="system", created_at=now)
-            self.store.create_item(item)
+            item = self._new_item(type, scope, "system")
             v = Version(item_id=item.item_id, content=src.content, label=src.label,
                         created_by="system", created_at=now, reason="write")
-            self.store.add_version(v, [Edge(child_version_id=v.version_id, parent_kind="source",
-                                            parent_id=src.source_id, relation="read_in_context")])
+            self.add_version(v, [Edge(child_version_id=v.version_id, parent_kind="source",
+                                      parent_id=src.source_id, relation="read_in_context")])
+        self.run_worker()
         return v
 
     def retrieve(
@@ -155,13 +201,14 @@ class MemGate:
             self._audit(agent, "retrieve", "scopes:" + ",".join(denied), "deny",
                         "; ".join(self.policy.check(agent, "read", s).reason for s in denied))
         # Mục private của agent khác do store lọc (owner), policy không ghi đè được.
-        cands = self.store.active_versions(allowed, min_label, agent=agent)
+        now = self._now_filter()
+        cands = self.store.active_versions(allowed, min_label, agent=agent, now=now)
         if not cands or k <= 0:
             return []
         self._embeddings(cands)          # bảo đảm mọi ứng viên có embedding trước khi tìm
         q = self.embedder.encode([query], is_query=True)[0]
         # pgvector (<=>) trên PostgreSQL, numpy trên SQLite. TODO(việc 12): nhân với lambda + (1 - lambda) * trust
-        hits = self.store.nearest(self.embedder.name, q, allowed, min_label, agent=agent, k=k)
+        hits = self.store.nearest(self.embedder.name, q, allowed, min_label, agent=agent, k=k, now=now)
         ctx = self.context(agent, session)
         with self.store.transaction():
             for v in hits:
@@ -193,11 +240,14 @@ class MemGate:
             raise KeyError(f"version {version_id} không thuộc item {item_id}")
         item = self.store.get_item(item_id)
         self._enforce(agent, "rollback", "write", item.scope, f"item:{item_id}", owner=item.owner_agent_id)
+        # Trạng thái cuối (expired, superseded, rejected) không được hồi sinh; trạng thái giữ nguyên.
+        self._require_status(agent, "rollback", item, ("active", "quarantined"))
         with self.store.transaction():
             v = Version(item_id=item_id, content=old.content, label=old.label, created_by=agent,
                         created_at=self.clock.now(), reason="rollback")
-            self.store.add_version(v, [Edge(child_version_id=v.version_id, parent_kind="version",
-                                            parent_id=old.version_id, relation="derived_from")])
+            self.add_version(v, [Edge(child_version_id=v.version_id, parent_kind="version",
+                                      parent_id=old.version_id, relation="derived_from")])
+        self.run_worker()
         return v
 
     # ---------- policy, share, audit (việc 6) ----------
@@ -213,6 +263,8 @@ class MemGate:
             self._deny(agent, "share", target, f"chỉ mở rộng scope ({item.scope} -> {to_scope} không hợp lệ)")
         if item.scope == "private" and item.owner_agent_id != agent:
             self._deny(agent, "share", target, f"mục private của {item.owner_agent_id}")
+        if item.status != "active":
+            self._deny(agent, "share", target, f"trạng thái {item.status}, chỉ promote mục active")
         self._enforce(agent, "share", "promote", to_scope, target, audit_allow=True)
         with self.store.transaction():
             self.store.set_item_scope(item_id, to_scope)
@@ -228,8 +280,8 @@ class MemGate:
         return self.store.list_audit(actor=actor, decision=decision)
 
     def _audit(self, actor: str, op: str, target: str, decision: str, reason: str) -> None:
-        self.store.append_audit(AuditEvent(ts=self.clock.now(), actor=actor, op=op, target=target,
-                                           decision=decision, reason=reason))
+        self.store.append_audit(AuditEvent(ts=self.clock.now(), actor=actor, op=op, target=redact(target),
+                                           decision=decision, reason=redact(reason)))
 
     def _deny(self, agent: str, op: str, target: str, reason: str) -> None:
         self._audit(agent, op, target, "deny", reason)
@@ -250,5 +302,12 @@ class MemGate:
         self._confirmed.add((agent, session, action_gate.confirmation_key(tool, args)))
 
     def authorize(self, agent: str, session: str, tool: str, args: dict[str, Any]) -> Decision:
-        confirmed = (agent, session, action_gate.confirmation_key(tool, args)) in self._confirmed
-        return action_gate.authorize(self.context(agent, session), tool, args, confirmed=confirmed)
+        """Mỗi quyết định ghi một dòng audit. Tắt mitigations.action_gate: luôn allow (ablation)."""
+        if self.mitigations.action_gate:
+            confirmed = (agent, session, action_gate.confirmation_key(tool, args)) in self._confirmed
+            d = action_gate.authorize(self.context(agent, session), tool, args, confirmed=confirmed)
+        else:
+            d = Decision(decision="allow", reason="action_gate tắt (ablation)")
+        self._audit(agent, "authorize", f"{tool} {json.dumps(args, ensure_ascii=False, default=str)}",
+                    d.decision, d.reason)
+        return d
