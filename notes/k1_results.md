@@ -46,7 +46,7 @@ Tiêu chí: MemGate ASR = 0/60 → cận trên 95% ≈ 3/60 = 5% (quy tắc 3/n)
 - Bảng nghiệm thu ở trên không đổi.
 - `--store postgres` ghi trace ra `runs/*__postgres.jsonl` (seed 0–2: ASR 0/6, benign 6/6).
 
-# K3 — Bùng nổ taint khi hợp nhất (việc 13, Gemini `gemini-3.5-flash-lite`, 30 seed)
+# K3 — Nhiễm bẩn chéo khi hợp nhất (việc 13, Gemini `gemini-3.5-flash-lite`, 30 seed)
 
 | Cấu hình | ASR | Benign | Taint thừa |
 |---|---|---|---|

@@ -9,7 +9,7 @@ Ngày 25/11/2026. Bản gốc trên Claude Docs: https://claude.ai/artifact/2Pep
 | Tấn công | Không phòng thủ | MemGate |
 | --- | --- | --- |
 | K1: rửa nguồn qua agent trung gian | 33/60 | 0/60 |
-| K3: bùng nổ taint khi hợp nhất | 27/30 + 29/30 | 0/120 (ba chế độ) |
+| K3: nhiễm bẩn chéo khi hợp nhất | 27/30 + 29/30 | 0/120 (ba chế độ) |
 | Đầu độc memory chung (MEM-INV-Bench) | 80/90 | 0/90 |
 
 Mốc tuần 2 mới đạt một phần. Đã có PostgreSQL + pgvector, vòng đời, audit và hợp nhất. Còn thiếu hàng đợi review (8), API và worker (9), K2 (10) và đủ bộ kịch bản (16). Thiết kế K2 đã soạn xong, đang chờ nhóm duyệt.

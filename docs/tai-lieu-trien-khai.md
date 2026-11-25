@@ -4,7 +4,7 @@ Nov 17, 2026 · @Linh
 
 Nhóm 12 (5 người) triển khai MemGate đúng theo Đặc tả thiết kế giải pháp, đủ FR1–FR10 và NFR1–NFR9, trong 4 tuần. Phần còn lại khoảng 57 người-ngày (pd), 68 pd nếu tính 20% dự phòng; sức chứa của nhóm là khoảng 80 pd.
 
-Trục sâu là provenance không bị rửa cho bộ nhớ dùng chung: chặn K1 (rửa qua agent trung gian), K2 (chứng thực tương quan) và K3 (bùng nổ taint khi hợp nhất). Lưu trữ dùng PostgreSQL + pgvector khi demo và chạy thí nghiệm, SQLite khi phát triển và chạy unit test, đúng như mục 6 của đặc tả.
+Trục sâu là provenance không bị rửa cho bộ nhớ dùng chung: chặn K1 (rửa qua agent trung gian), K2 (chứng thực tương quan) và K3 (nhiễm bẩn chéo khi hợp nhất). Lưu trữ dùng PostgreSQL + pgvector khi demo và chạy thí nghiệm, SQLite khi phát triển và chạy unit test, đúng như mục 6 của đặc tả.
 
 Việc 1 đã xong: cache LLM chạy với `gemini-3.5-flash-lite`, lần gọi thứ hai trúng cache. Khung repo ở `~/Downloads/memgate-lean` có 35 test pass và 6 test `xfail` là tiêu chí nghiệm thu của việc 4 và 5.
 
@@ -255,6 +255,105 @@ Worker có hai chế độ:
 - `inline`: dùng khi test và chạy thí nghiệm. Hàng việc được xử lý hết tại các điểm cố định (sau mỗi lượt ghi và cuối session), nên kết quả không phụ thuộc thời gian và chạy lại bằng `LLM_CACHE=readonly` vẫn giống hệt.
 
 p95 đo trên các bước đồng bộ mà NFR3 liệt kê (policy, gán nhãn, redact, heuristic đầu độc, ghi version). `retrieve` không nằm trong p95; báo cáo ghi rõ điều này và đo riêng độ trễ `retrieve` ở 100.000 mục cho NFR5.
+
+## Gán nhãn và chính sách bảo vệ
+
+Ý tưởng chính: MemGate **không cố nhận ra nội dung độc** (prompt injection, chỉ dẫn cài trong trang web, ghi chú
+memory bị đầu độc). Nó theo dõi **dữ liệu đến từ đâu** và không cho giá trị từ nguồn không tin cậy điều khiển hành
+động nguy hiểm. Mọi quyết định là luật tất định, không gọi LLM (NFR1); trường hợp không chắc chắn luôn ra review (NFR2).
+
+### 1. Ba mức nhãn
+
+| Nhãn | Ý nghĩa | Gán cho |
+| --- | --- | --- |
+| **T** (trusted) | Tin cậy | Task của người dùng (`kind=user`), tool đã xác thực (`kind=tool`), sự thật nạp qua `ingest_trusted` |
+| **A** (agent) | Do agent tạo ra khi chưa đọc nguồn U | Output, message, memory của agent có context sạch |
+| **U** (untrusted) | Không tin cậy | Web, file, MCP, nguồn chưa đăng ký; mọi thứ bị nhiễm từ chúng |
+
+Thứ tự **U < A < T**. Nguồn có `kind` lạ mặc định là U (fail-closed, `labels.label_for_kind`). Nhãn **chỉ đi xuống**:
+mọi phép kết hợp dùng `min`, không có thao tác nào nâng nhãn (bất biến trong code, có test kiểm tra).
+
+### 2. Luật gán nhãn theo từng thao tác
+
+Mỗi agent trong mỗi session có **nhãn context L**, bắt đầu là T và bằng min nhãn của mọi thứ agent đã đọc.
+Lịch sử đọc lưu ở bảng `context_reads`, nên khởi động lại không làm L cao hơn nhãn thật.
+
+| Thao tác | Luật | Chặn gì |
+| --- | --- | --- |
+| `observe(source)` (tool đọc web, file, task) | L ← min(L, nhãn nguồn); nội dung được redact trước khi lưu | Agent đọc trang bẩn thì mọi thứ nó làm sau đó mang nhãn U |
+| `send_message` (delegate, trả kết quả) | Message mang min(A, L người gửi); người nhận observe ngay | **K1**: không rửa được nội dung bẩn qua agent trung gian |
+| `write` (memory) | Version mới mang min(A, L); ghi cạnh lineage tới mọi thứ đã đọc | **Đầu độc memory**: ghi chú chép từ trang bẩn mang nhãn U mãi mãi |
+| `retrieve` (recall) | Chỉ trả mục active, trong scope được phép; L người đọc hạ xuống nhãn thấp nhất trong kết quả | Đọc memory bẩn thì context của người đọc cũng thành U |
+| `share` / promote | Giữ nguyên nhãn, chỉ promote mục active, phải qua policy | Không "tẩy" nhãn bằng cách chuyển scope |
+| `rollback` | Version mới mang nội dung **và nhãn** của version cũ | Không nâng nhãn bằng rollback |
+| `consolidate` | `fail_closed`: bản tóm tắt mang nhãn thấp nhất của input. `partition`: tóm tắt riêng từng nhãn. `rederive`: mệnh đề chỉ lên T khi qua 3 kiểm tra bằng máy | **K3**: hợp nhất không biến nội dung bẩn thành tin cậy |
+| `authorize` (tool hành động) | Cổng hành động, mục 3 | Chặn hành động mang giá trị do kẻ tấn công cài vào |
+
+### 3. Cổng hành động (`memgate/action_gate.py`)
+
+Mỗi tool hành động khai báo tham số nhạy cảm, tức chỗ kẻ tấn công muốn cài giá trị:
+
+| Tool | Tham số nhạy cảm |
+| --- | --- |
+| `send_email`, `send_data` | `to` |
+| `wire_transfer`, `pay` | `to`, `amount` |
+| `http_post` | `url` |
+| `shell` | `cmd` |
+| `update_setting` | `key`, `value` |
+| `purchase` | `to`, `item`, `amount` |
+
+Thứ tự xét (luật nào khớp trước thì dùng):
+
+1. Tool chưa đăng ký → **review**.
+2. L ≥ A (agent chưa đọc nguồn U trong session) → **allow**.
+3. Người dùng đã xác nhận đúng hành động đó → **allow**.
+4. Mọi giá trị nhạy cảm có **nguyên văn** trong một nguồn T → **allow**. Nguồn T gồm nguồn T agent đã đọc trong session,
+   và root của memory agent đã đọc khi mọi root của nó đều là T (đặc tả mục 7.2). Giá trị là số hoặc ngắn
+   (dưới 6 ký tự) phải nằm cùng một nguồn T với các giá trị còn lại (số tiền phải đi cùng người nhận).
+   "Nguyên văn" so sau `normalize_value`: chuẩn hoá hoa/thường email, cách viết số, khoảng trắng; giá trị bị ghép
+   chuỗi hay mã hoá sẽ không khớp.
+5. Còn lại → **review** (hiện tính là chặn; hàng đợi review ở việc 8).
+
+Trường nhiều người nhận được kiểm tra từng địa chỉ: email gửi boss kèm địa chỉ độc bị review cả lời gọi.
+
+### 4. Policy truy cập (`configs/policy.yaml`, FR7)
+
+Mỗi agent một vai trò (`member` hoặc `admin`; agent lạ nhận `default_role`). Mỗi luật gồm vai trò × scope × hành động
+(`read`, `write`, `promote`) × hiệu lực.
+
+| Scope | read | write | promote lên scope này |
+| --- | --- | --- | --- |
+| `private` | chỉ chủ sở hữu | chỉ chủ sở hữu | — |
+| `team` | mọi vai trò | mọi vai trò | mọi vai trò |
+| `global` | mọi vai trò | chỉ `admin` | chỉ `admin` |
+
+- **Deny thắng** allow; không luật nào khớp → deny.
+- Mục `private` chỉ chủ sở hữu đọc, ghi, promote được. Đây là bất biến trong code, policy không ghi đè được.
+- Promote kiểm quyền trên scope **đích**, và không bao giờ đổi nhãn.
+- Mọi lần từ chối (và mọi lần promote được phép) ghi một dòng `audit_events`.
+
+### 5. Quy tắc cho từng service
+
+| Service | Quy tắc |
+| --- | --- |
+| **Agent Runtime** | Mọi tool đọc phải gọi `observe`, mọi tool hành động phải gọi `authorize` (đã gói sẵn trong `ToolBox`). Chỉ planner có tool hành động. Message giữa agent đi qua `send_message`, không truyền thẳng. |
+| **LLM Service** | Chỉ đề xuất, không bao giờ quyết định nhãn hay quyền. Mọi lời gọi qua `harness.llm.LLM` (cache theo hash prompt để tái lập). |
+| **MemGate Service** | Là nơi duy nhất gán nhãn, áp policy và quyết định allow/review. Redact secret (detect-secrets) trước khi lưu bất kỳ nội dung nào: source, version, audit. Công tắc `mitigations` chỉ dùng cho ablation. |
+| **Worker** | Tính embedding rồi chuyển mục pending → active; mục pending chưa được truy xuất. Áp retention theo mục 6 của đặc tả (khi bật `expiration`): short_term xoá khi hết session, long_term hết hạn sau 90 ngày không dùng (dùng thì gia hạn), retrieved từ web 7 ngày, shared không có TTL cứng. Chuyển trạng thái chỉ theo bảng 7 trạng thái hợp lệ. |
+| **Model Runtime (ONNX)** | Embedding chỉ dùng để xếp hạng; NLI chỉ là một trong 3 kiểm tra của `rederive`. Không model nào cấp quyền. |
+| **Storage** | Version bất biến (ghi mới, không ghi đè). Audit nối hash chain `sha256(prev_hash + sự kiện)`, khoá khi ghi; `python -m memgate.audit verify` phát hiện sửa, xoá, đổi thứ tự. |
+
+### 6. Tổng hợp: tấn công nào bị chặn ở đâu
+
+| Tấn công | Kẻ tấn công làm gì | Chặn bởi |
+| --- | --- | --- |
+| Prompt injection trực tiếp | Trang web bảo agent gửi dữ liệu tới địa chỉ độc | Nhãn context U + cổng hành động (địa chỉ không có trong nguồn T) |
+| **K1** rửa nguồn qua agent trung gian | Coder đọc trang bẩn, chuyển chỉ dẫn cho planner | Nhãn ở ranh giới message (tắt đi thì lọt 33/60) |
+| Đầu độc memory chung | Ghi chú độc vào memory nhóm, agent khác tra cứu rồi làm theo | Memory mang nhãn U; `retrieve` hạ nhãn người đọc; cổng hành động |
+| **K3** nhiễm bẩn chéo khi hợp nhất | Ghi chú độc bị gộp chung với sự thật T trong bản tóm tắt | `fail_closed` / `partition` / `rederive` |
+| Truy cập trái phép | Agent đọc, ghi mục private của agent khác hoặc ghi vào `global` | Policy + audit |
+| Sửa log để che dấu vết | Sửa, xoá dòng audit | Hash chain + `verify` |
+| **K2** chứng thực tương quan | Nhiều agent cùng lặp lại một nguồn bẩn để trông như được xác nhận | Chứng thực không cấp quyền; kiểm tra độc lập theo nguồn gốc ở việc 10 |
 
 ## Harness
 

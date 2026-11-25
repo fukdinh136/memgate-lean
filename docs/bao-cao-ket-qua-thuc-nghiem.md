@@ -146,7 +146,7 @@ Lần chạy cuối (`k1_chain` × MemGate): 328 lời gọi LLM, 288 từ cache
 
 Tái lập (NFR8): sau khi sửa lỗi `remember` đưa mã item ngẫu nhiên vào prompt, chạy lại cả 4 ô × 30 seed với `LLM_CACHE=readonly` cho kết quả giống hệt bảng trên: 1284 lượt trúng cache, 0 trượt.
 
-## K3: bùng nổ taint khi hợp nhất (việc 13)
+## K3: nhiễm bẩn chéo khi hợp nhất (việc 13)
 
 Nghiệm thu việc 13 đạt trên Gemini: MemGate chặn 60/60 lượt tấn công K3 ở cả hai chế độ hợp nhất, trong khi không phòng thủ thì tấn công thành công 27/30 lượt.
 
