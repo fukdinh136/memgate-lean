@@ -115,4 +115,4 @@ hành động (cổng chỉ xét nguồn T).
   - Tổng quan triển khai (sơ đồ): https://claude.ai/artifact/6fdbofsK2LZPTSKuT1K1Kp
   - Báo cáo tiến độ (25/11/2026): https://claude.ai/artifact/2PepUpwhEXnSHAwsYtF1uB
 - Trong repo: `notes/baseline.md`, `notes/baseline_results.md`, `notes/k1_results.md` (K1, K3, NLI, rederive),
-  `notes/meminv_multiagent.md` (việc 3), `notes/lifecycle_audit.md` (việc 7), `notes/k2_independence_design.md` (thiết kế việc 10).
+  `notes/meminv_multiagent.md` (việc 3), `notes/lifecycle_audit.md` (việc 7), `notes/k2_independence_design.md` (thiết kế việc 10), `notes/trust_score_literature.md` (tài liệu cho việc 12).
