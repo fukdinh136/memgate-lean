@@ -94,7 +94,9 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 6. Việc ngay tiếp theo
 
-1. Việc 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18.
+1. Việc 10: thiết kế bản 2 ở `notes/k2_independence_design.md`, CHỜ người dùng duyệt rồi mới code.
+   Song song 16 (K2), rồi 8, 9; 10 và 16 mở khoá 12 và 18.
+   Báo cáo tiến độ cho thầy (25/11): `docs/bao-cao-tien-do.md`, có 4 câu hỏi chờ thầy trả lời.
 2. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
    cập nhật `TECH_STACK.md` (repo cũ); bỏ mảnh tiêu đề ở bước tách mệnh đề của rederive.
 
@@ -106,5 +108,6 @@ hành động (cổng chỉ xét nguồn T).
   - Tài liệu triển khai (bảng 21 việc, checklist): https://claude.ai/artifact/KqcdJFNM33wB9Wunc9PoCY
   - Báo cáo kết quả thực nghiệm: https://claude.ai/artifact/KcDJi6hXSNWXNC3DkN4pwA
   - Tổng quan triển khai (sơ đồ): https://claude.ai/artifact/6fdbofsK2LZPTSKuT1K1Kp
+  - Báo cáo tiến độ (25/11/2026): https://claude.ai/artifact/2PepUpwhEXnSHAwsYtF1uB
 - Trong repo: `notes/baseline.md`, `notes/baseline_results.md`, `notes/k1_results.md` (K1, K3, NLI, rederive),
-  `notes/meminv_multiagent.md` (việc 3), `notes/lifecycle_audit.md` (việc 7).
+  `notes/meminv_multiagent.md` (việc 3), `notes/lifecycle_audit.md` (việc 7), `notes/k2_independence_design.md` (thiết kế việc 10).
