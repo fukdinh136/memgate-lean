@@ -11,7 +11,7 @@ Thiết kế bản 2 đã được duyệt ngày 2026-11-25. Code nằm ở:
 - `memgate/store/*` (migration `002_jobs.sql`)
 - `harness/run.py --mitigation`
 
-Test nằm ở `tests/test_lifecycle_audit.py` (45 test). Cả bộ test: 241 passed.
+Test nằm ở `tests/test_lifecycle_audit.py` (46 test). Cả bộ test: 242 passed.
 
 ## Vòng đời 7 trạng thái
 
@@ -45,14 +45,22 @@ Retention chỉ chạy khi bật `mitigations.expiration`. Khi đó:
 
 Đồng hồ là `Clock` truyền vào; test dùng `FakeClock`.
 
-Giá trị retention hiện là **giá trị tạm**, chờ bảng ở mục 6 của đặc tả. Sửa trong `configs/default.yaml` (`memgate.retention_days`):
+Bảng retention đã được duyệt ngày 2026-11-25 (phương án theo loại memory). Sửa trong `configs/default.yaml` (`memgate.retention_days`); giá trị `null` nghĩa là không hết hạn.
 
-| Loại | Hạn |
-|---|---|
-| short_term | 1 ngày |
-| retrieved | 7 ngày |
-| shared | 30 ngày |
-| long_term | không hết hạn |
+| Loại | Hạn | Lý do |
+|---|---|---|
+| short_term | 1 ngày | Bộ nhớ làm việc của một phiên |
+| retrieved | 7 ngày | Nội dung từ web/tool, thường nhãn U, đổi nhanh; là kênh đầu độc chính |
+| shared | 30 ngày | Ghi chú chung của nhóm agent; bằng ngưỡng quarantine 30 ngày |
+| long_term | 180 ngày | Để mục U/A trong long_term không tồn tại mãi; mục bị thay đã có `superseded` |
+
+Các mốc liên quan: quarantine không được review quá 30 ngày → rejected (việc 8); `audit_events` không bao giờ xoá (xoá sẽ gãy hash chain); dọn job `done` trong bảng `jobs` là tuỳ chọn ở việc 9.
+
+Hạn chế đã chấp nhận:
+
+- Hạn tính **lúc tạo mục** và không gia hạn khi mục được dùng hay được thêm version, nên mục T cũng mất sau 180 ngày.
+- Hạn chưa phân theo nhãn (ví dụ long_term nhãn T không hết hạn, U 30 ngày). Chỉ làm nếu kịch bản memory cũ ở việc 16 cho thấy mục U tồn lâu gây hại; cách này cần lưu hạn theo version và có thể lệch đặc tả.
+- Kết quả đã có không đổi: harness ghi mọi mục là long_term và cờ `expiration` mặc định tắt.
 
 ## Audit hash chain
 

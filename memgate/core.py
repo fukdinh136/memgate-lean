@@ -22,8 +22,8 @@ if TYPE_CHECKING:
 
 __all__ = ["MemGate", "AgentContext"]
 
-# Retention theo loại memory, đơn vị ngày; None = không hết hạn. GIÁ TRỊ TẠM: chờ bảng ở mục 6 của đặc tả.
-DEFAULT_RETENTION_DAYS = {"short_term": 1, "retrieved": 7, "shared": 30, "long_term": None}
+# Retention theo loại memory, đơn vị ngày; None = không hết hạn. Đã duyệt 2026-11-25.
+DEFAULT_RETENTION_DAYS = {"short_term": 1, "retrieved": 7, "shared": 30, "long_term": 180}
 
 
 class MemGate:

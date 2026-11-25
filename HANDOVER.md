@@ -29,7 +29,7 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   set LLM_CACHE=readwrite
   set MEMGATE_EMBED_MODEL=          :: để trống = BGE (mặc định); =hash để dùng embedding băm
   ```
-- `python -m pytest -q` phải ra **241 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
+- `python -m pytest -q` phải ra **242 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
 - LLM: Gemini `gemini-3.5-flash-lite` (config `configs/default.yaml`), cache SQLite `.cache/llm.sqlite` (có trong git).
   Gói miễn phí ~500 lời gọi/ngày/project, reset 15:00 giờ VN. Nhiều key: `secrets/gemini_keys.txt` (mỗi dòng
   một key, mỗi key một project), `harness/llm.py` tự xoay vòng, bỏ qua key hết quota/403.
@@ -48,7 +48,7 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   worker inline `process_pending`, retention `sweep_expired`); `audit.py` (hash chain, `python -m memgate.audit
   verify|rehash --store URL`); `redact.py` (detect-secrets, mọi chỗ ghi xuống store); `mitigations.py` (công tắc
   ablation; `run.py --mitigation boundary_labeling=off`, trace thêm hậu tố `__no-boundary_labeling`).
-  Retention trong `configs/default.yaml` là GIÁ TRỊ TẠM, chờ bảng mục 6 của đặc tả.
+  Retention trong `configs/default.yaml` (đã duyệt 2026-11-25): short_term 1, retrieved 7, shared 30, long_term 180 ngày.
 - `memgate/store/`: interface `Store`; `sqlite.py` và `postgres.py` (pgvector, HNSW cho BGE 384 chiều, schema tạm
   mỗi lượt). Migration `memgate/store/migrations/001_init.sql`, `002_jobs.sql`. `nearest()` = top-k cosine (numpy / `<=>`).
 - `memgate/consolidate.py`: hợp nhất `fail_closed`, `partition`, `rederive` (tái dẫn xuất: tách mệnh đề, trích bằng
@@ -94,7 +94,7 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 6. Việc ngay tiếp theo
 
-1. Việc 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18. Lấy bảng retention ở mục 6 của đặc tả thay giá trị tạm.
+1. Việc 8, 9; song song 10, 16 (K2) để mở khoá 12 và 18.
 2. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
    cập nhật `TECH_STACK.md` (repo cũ); bỏ mảnh tiêu đề ở bước tách mệnh đề của rederive.
 

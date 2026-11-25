@@ -261,7 +261,7 @@ def test_expired_item_hidden_before_sweep_then_marked_expired(store):
     g = gate(store, clock, mitigations={"expiration": True})
     short = g.write("coder", "s", "short_term", "team", "mật khẩu wifi tạm")
     keep = g.write("coder", "s", "long_term", "team", "mật khẩu wifi chính")
-    assert g.store.get_item(keep.item_id).expires_at is None
+    assert g.store.get_item(keep.item_id).expires_at is not None   # long_term: 180 ngày
     clock.advance(hours=23)
     assert len(g.retrieve("planner", "s1", "mật khẩu wifi")) == 2
     clock.advance(hours=2)                         # short_term: 1 ngày
@@ -270,6 +270,15 @@ def test_expired_item_hidden_before_sweep_then_marked_expired(store):
     assert g.sweep_expired() == [short.item_id]
     assert g.store.get_item(short.item_id).status == "expired"
     assert g.audit_log()[-1].reason == "active->expired: hết hạn retention"
+    clock.advance(days=179)                        # tổng 180 ngày + 1 giờ
+    assert g.retrieve("planner", "s3", "mật khẩu wifi") == []
+    assert g.sweep_expired() == [keep.item_id]
+
+
+def test_retention_null_means_no_deadline():
+    g = gate(mitigations={"expiration": True}, retention_days={"long_term": None})
+    v = g.write("coder", "s", "long_term", "team", "x")
+    assert g.store.get_item(v.item_id).expires_at is None
 
 
 # ---------- redact ----------

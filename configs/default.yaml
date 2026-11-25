@@ -25,10 +25,10 @@ memgate:
     expiration: false
     human_review: false
   # Retention theo loại memory (ngày; null = không hết hạn), chỉ áp khi mitigations.expiration: true.
-  # GIÁ TRỊ TẠM: chờ bảng ở mục 6 của đặc tả.
+  # Đã duyệt 2026-11-25 (notes/lifecycle_audit.md). Hạn tính lúc tạo mục, chưa gia hạn khi mục được dùng.
   retention_days:
     short_term: 1
     retrieved: 7
     shared: 30
-    long_term: null
+    long_term: 180
   worker: inline            # inline: xử lý hàng đợi ngay sau mỗi lần ghi; background ở việc 9
