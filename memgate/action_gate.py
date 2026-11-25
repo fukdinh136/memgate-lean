@@ -44,9 +44,11 @@ def _is_short(v: str) -> bool:
     return is_number(v) or len(normalize_value(v)) < SHORT
 
 
-def authorize(ctx: "AgentContext", tool: str, args: dict[str, Any], confirmed: bool = False) -> Decision:
+def authorize(ctx: "AgentContext", tool: str, args: dict[str, Any], confirmed: bool = False,
+              memory_trusted: "list[Source] | None" = None) -> Decision:
     """1. L >= A (chưa đọc nguồn U trong session): allow.
-    2. Mọi giá trị nhạy cảm xuất hiện nguyên văn trong một nguồn T thuộc source_set; giá trị số hoặc
+    2. Mọi giá trị nhạy cảm xuất hiện nguyên văn trong một nguồn T: nguồn T trong source_set, hoặc root
+       của một chứng thực có roots toàn T mà agent đã đọc (spec 7.2, memory_trusted). Giá trị số hoặc
        ngắn phải nằm cùng MỘT nguồn T với mọi giá trị còn lại của lời gọi: allow.
     3. Người dùng đã xác nhận đúng hành động này: allow.
     4. Còn lại: review."""
@@ -60,7 +62,7 @@ def authorize(ctx: "AgentContext", tool: str, args: dict[str, Any], confirmed: b
     values = sensitive_values(tool, args)
     if not values:
         return Decision(decision="review", reason="thiếu tham số nhạy cảm để đối chiếu")
-    trusted: list[Source] = ctx.trusted_sources()
+    trusted: list[Source] = ctx.trusted_sources() + list(memory_trusted or [])
 
     if any(_is_short(v) for v in values):
         # Cần một nguồn T chứa TẤT CẢ giá trị (vd amount phải đi cùng người nhận).

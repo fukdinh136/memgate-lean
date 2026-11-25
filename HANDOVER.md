@@ -29,7 +29,7 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   set LLM_CACHE=readwrite
   set MEMGATE_EMBED_MODEL=          :: để trống = BGE (mặc định); =hash để dùng embedding băm
   ```
-- `python -m pytest -q` phải ra **242 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
+- `python -m pytest -q` phải ra **252 passed** khi đặt đủ biến trên (thiếu biến thì test PostgreSQL/ONNX bị skip).
 - LLM: Gemini `gemini-3.5-flash-lite` (config `configs/default.yaml`), cache SQLite `.cache/llm.sqlite` (có trong git).
   Gói miễn phí ~500 lời gọi/ngày/project, reset 15:00 giờ VN. Nhiều key: `secrets/gemini_keys.txt` (mỗi dòng
   một key, mỗi key một project), `harness/llm.py` tự xoay vòng, bỏ qua key hết quota/403.
@@ -48,7 +48,10 @@ File này để một agent/tài khoản khác tiếp tục dự án mà không 
   worker inline `process_pending`, retention `sweep_expired`); `audit.py` (hash chain, `python -m memgate.audit
   verify|rehash --store URL`); `redact.py` (detect-secrets, mọi chỗ ghi xuống store); `mitigations.py` (công tắc
   ablation; `run.py --mitigation boundary_labeling=off`, trace thêm hậu tố `__no-boundary_labeling`).
-  Retention trong `configs/default.yaml` (đã duyệt 2026-11-25): short_term 1, retrieved 7, shared 30, long_term 180 ngày.
+  Retention theo bảng mục 6 của đặc tả (`memgate.retention`): short_term xoá khi `end_session`, long_term 90 ngày
+  không dùng (retrieve/cập nhật gia hạn), retrieved 7 ngày nếu có nguồn web, shared không TTL cứng.
+- Cổng hành động (spec 7.2): ngoài nguồn T trong context, nhận root của version agent đã đọc nếu mục còn active
+  và mọi root mang nhãn T. Kind nguồn theo đặc tả: `user, tool, web, mcp, file, agent` (`tool` = tool đã xác thực).
 - `memgate/store/`: interface `Store`; `sqlite.py` và `postgres.py` (pgvector, HNSW cho BGE 384 chiều, schema tạm
   mỗi lượt). Migration `memgate/store/migrations/001_init.sql`, `002_jobs.sql`. `nearest()` = top-k cosine (numpy / `<=>`).
 - `memgate/consolidate.py`: hợp nhất `fail_closed`, `partition`, `rederive` (tái dẫn xuất: tách mệnh đề, trích bằng
@@ -94,9 +97,11 @@ hành động (cổng chỉ xét nguồn T).
 
 ## 6. Việc ngay tiếp theo
 
-1. Việc 10: thiết kế bản 2 ở `notes/k2_independence_design.md`, CHỜ người dùng duyệt rồi mới code.
+1. Việc 10: thiết kế bản 3 (theo nguyên văn mục 7.2) ở `notes/k2_independence_design.md`, CHỜ người dùng duyệt.
    Song song 16 (K2), rồi 8, 9; 10 và 16 mở khoá 12 và 18.
-   Báo cáo tiến độ cho thầy (25/11): `docs/bao-cao-tien-do.md`, có 4 câu hỏi chờ thầy trả lời.
+   Báo cáo tiến độ cho thầy (25/11): `docs/bao-cao-tien-do.md`, có 3 câu hỏi chờ thầy trả lời.
+   **Nguyên tắc: không lệch đặc tả.** Đối chiếu PDF `C:\Users\giaph\Downloads\Group12_Project13_SolutionDesignSpecification.pdf`
+   trước khi chốt bất kỳ giá trị hay định nghĩa nào (đọc bằng `pdftotext -layout`).
 2. Việc phụ: mời 4 thành viên vào repo; chốt hạn nộp và người phụ trách luồng; sửa README phần Windows;
    cập nhật `TECH_STACK.md` (repo cũ); bỏ mảnh tiêu đề ở bước tách mệnh đề của rederive.
 

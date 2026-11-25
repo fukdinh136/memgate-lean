@@ -23,8 +23,9 @@ def output_label(context_label: Label) -> Label:
     return meet(Label.A, context_label)
 
 
-# Kênh đầu vào đã xác thực (giả định A1). Mọi kind khác mặc định U (NFR2: fail-closed).
-TRUSTED_KINDS = frozenset({"user", "tool_trusted"})
+# Kênh đầu vào đã xác thực (spec 7.1: user và tool đã xác thực). Tool chưa xác thực khai báo kind web/mcp.
+# Mọi kind khác mặc định U (NFR2: fail-closed).
+TRUSTED_KINDS = frozenset({"user", "tool"})
 
 
 def label_for_kind(kind: str) -> Label:

@@ -44,7 +44,7 @@ def _shared_nli(factory):
     return _NLI["nli"]
 
 
-GATE_KEYS = ("mitigations", "retention_days", "worker")   # embedding_model: chọn bằng MEMGATE_EMBED_MODEL
+GATE_KEYS = ("mitigations", "retention", "worker")   # embedding_model: chọn bằng MEMGATE_EMBED_MODEL
 
 
 def make_gate(name: str, store_url: str | None = None, gate_config: dict | None = None):

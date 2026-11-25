@@ -11,7 +11,7 @@ Thiết kế bản 2 đã được duyệt ngày 2026-11-25. Code nằm ở:
 - `memgate/store/*` (migration `002_jobs.sql`)
 - `harness/run.py --mitigation`
 
-Test nằm ở `tests/test_lifecycle_audit.py` (46 test). Cả bộ test: 242 passed.
+Test nằm ở `tests/test_lifecycle_audit.py` (52 test). Cả bộ test: 252 test.
 
 ## Vòng đời 7 trạng thái
 
@@ -35,32 +35,41 @@ Cạnh `pending → quarantined` và `pending → under_review` dành cho heuris
 - **Không thêm cột ngoài thực thể của đặc tả.** Thời điểm chuyển trạng thái lấy từ dòng audit `transition`. Bảng `jobs` đã có sẵn trong kiến trúc worker của kế hoạch.
 - **Quét quarantine quá 30 ngày → rejected** thuộc việc 8. Cạnh này đã có sẵn trong bảng.
 
-## Retention
+## Retention (bảng mục 6 của đặc tả)
 
-Retention chỉ chạy khi bật `mitigations.expiration`. Khi đó:
+Retention chỉ chạy khi bật `mitigations.expiration` (FR9: mỗi biện pháp bật/tắt độc lập). Đồng hồ là `Clock`
+truyền vào; test dùng `FakeClock`. Số ngày cấu hình được ở `memgate.retention` trong `configs/default.yaml`.
 
-- Mục mới nhận `expires_at = now + retention_days[type]`.
-- `retrieve` và `consolidate` bỏ qua mục đã quá hạn dù worker chưa quét.
-- `sweep_expired()` chuyển các mục đó sang `expired`.
-
-Đồng hồ là `Clock` truyền vào; test dùng `FakeClock`.
-
-Bảng retention đã được duyệt ngày 2026-11-25 (phương án theo loại memory). Sửa trong `configs/default.yaml` (`memgate.retention_days`); giá trị `null` nghĩa là không hết hạn.
-
-| Loại | Hạn | Lý do |
+| Loại | Đặc tả | Cài đặt |
 |---|---|---|
-| short_term | 1 ngày | Bộ nhớ làm việc của một phiên |
-| retrieved | 7 ngày | Nội dung từ web/tool, thường nhãn U, đổi nhanh; là kênh đầu độc chính |
-| shared | 30 ngày | Ghi chú chung của nhóm agent; bằng ngưỡng quarantine 30 ngày |
-| long_term | 180 ngày | Để mục U/A trong long_term không tồn tại mãi; mục bị thay đã có `superseded` |
+| short_term | Theo session; xoá khi session kết thúc, chỉ giữ log audit | `end_session(session)`: active → expired rồi xoá mục, version, cạnh con và job; ghi audit `op="delete"` |
+| long_term | 90 ngày không được sử dụng → expired, giữ version để audit | `expires_at = now + 90 ngày`, gia hạn mỗi lần retrieve trúng hoặc cập nhật mục |
+| retrieved | 7 ngày với nguồn web, hoặc khi hash nguồn đổi | 7 ngày nếu roots của version có nguồn web; "hash nguồn đổi" thuộc bộ phát hiện memory cũ (việc 11b) |
+| shared | Không có TTL cứng; kiểm tra cũ khi có version mới hơn từ cùng nguồn | Không đặt hạn; kiểm tra cũ thuộc việc 11b |
+| quarantined | 30 ngày không được review → rejected | `retention.quarantine_days: 30`; quét thuộc việc 8 |
 
-Các mốc liên quan: quarantine không được review quá 30 ngày → rejected (việc 8); `audit_events` không bao giờ xoá (xoá sẽ gãy hash chain); dọn job `done` trong bảng `jobs` là tuỳ chọn ở việc 9.
+- `retrieve` và `consolidate` bỏ qua mục đã quá hạn dù worker chưa quét; `sweep_expired()` chuyển chúng sang
+  `expired`.
+- **Short-term và lineage.** Nếu đã có mục khác dẫn xuất từ một mục short-term (cạnh lineage trỏ về version của
+  nó), mục đó chỉ chuyển `expired` chứ không xoá, để không gãy truy vết (FR2: truy ngược được nguồn gốc cho 100%
+  mục). Mục đang `quarantined`/`under_review` chờ review (việc 8).
+- **Short-term thuộc session nào** được giữ trong `AgentContext` (trạng thái runtime theo session, như mục 6),
+  không thêm cột vào MemoryItem. Khởi động lại tiến trình thì danh sách này mất, mục short-term của session cũ
+  không bị xoá tự động.
+- Kết quả đã đo không đổi: cờ `expiration` mặc định tắt, harness chưa gọi `end_session`.
 
-Hạn chế đã chấp nhận:
+Ngày 25/11 nhóm từng chốt nhầm bảng 1/7/30/180 ngày mà không đối chiếu đặc tả; đã sửa lại như trên.
 
-- Hạn tính **lúc tạo mục** và không gia hạn khi mục được dùng hay được thêm version, nên mục T cũng mất sau 180 ngày.
-- Hạn chưa phân theo nhãn (ví dụ long_term nhãn T không hết hạn, U 30 ngày). Chỉ làm nếu kịch bản memory cũ ở việc 16 cho thấy mục U tồn lâu gây hại; cách này cần lưu hạn theo version và có thể lệch đặc tả.
-- Kết quả đã có không đổi: harness ghi mọi mục là long_term và cờ `expiration` mặc định tắt.
+## Đợt sửa theo đặc tả (25/11)
+
+- Retention làm lại theo bảng mục 6 (mục trên).
+- Kind nguồn theo mục 6: `user, tool, web, mcp, file, agent` (trước đây `tool_trusted`).
+- Cổng hành động theo mục 7.2: ngoài nguồn T trong context, nhận root của version agent đã đọc nếu mục còn
+  active và mọi root mang nhãn T ("chứng thực có roots toàn là nguồn T"). Luật số tiền cùng nguồn với người
+  nhận giữ nguyên. Test: `tests/test_action_gate.py` (4 test mới).
+- Hồi quy readonly mọi ô MemGate và TMA-NM (K1, K3, MEM-INV): 0 lượt trượt cache, trace giống hệt bản đã
+  commit; cổng hành động mới không đổi quyết định nào trong các kịch bản đã đo.
+- Test: 214 pass trên SQLite/ONNX; 38 test PostgreSQL chưa chạy lại được vì Docker Desktop không phản hồi.
 
 ## Audit hash chain
 

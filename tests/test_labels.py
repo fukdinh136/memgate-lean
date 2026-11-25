@@ -10,7 +10,7 @@ def src(kind, label=None, content="x"):
 
 def test_source_labels_by_channel():
     assert src("user").label == Label.T
-    assert src("tool_trusted").label == Label.T
+    assert src("tool").label == Label.T
     for kind in ("web", "mcp", "file"):
         assert src(kind).label == Label.U
 
@@ -36,7 +36,7 @@ def test_new_context_starts_trusted_and_sessions_are_isolated():
 
 def test_context_label_never_increases_random_ops():
     rng = random.Random(0)
-    kinds = ["user", "tool_trusted", "web", "mcp", "file"]
+    kinds = ["user", "tool", "web", "mcp", "file"]
     agents = ["planner", "coder", "reviewer"]
     for trial in range(50):
         g = MemGate()

@@ -31,6 +31,9 @@ class Store(Protocol):
     def get_item(self, item_id: str) -> MemoryItem | None: ...
     def set_item_scope(self, item_id: str, scope: str) -> None: ...         # share/promote (việc 6)
     def set_item_status(self, item_id: str, status: str) -> None: ...       # vòng đời (việc 7, 13)
+    def set_item_expires(self, item_id: str, expires_at: datetime | None) -> None: ...  # retention
+    def has_dependents(self, item_id: str) -> bool: ...                   # mục khác dẫn xuất từ mục này
+    def delete_item(self, item_id: str) -> None: ...                      # short-term hết session
     def add_version(self, v: Version, edges: list[Edge]) -> None: ...   # version + cạnh + current_version_id
     def get_version(self, version_id: str) -> Version | None: ...
     def list_versions(self, item_id: str) -> list[Version]: ...         # cũ -> mới

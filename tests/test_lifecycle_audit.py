@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -248,37 +248,89 @@ def test_consolidate_outputs_pass_through_pending():
     assert reasons.count("pending->active: embedding xong") == 3
 
 
-# ---------- retention ----------
+# ---------- retention (bảng mục 6 của đặc tả) ----------
+
+ON = {"expiration": True}
+
 
 def test_expiration_off_by_default_sets_no_deadline():
     g = gate()
-    v = g.write("coder", "s", "short_term", "team", "x")
+    v = g.write("coder", "s", "long_term", "team", "x")
+    s = g.write("coder", "s", "short_term", "team", "y")
     assert g.store.get_item(v.item_id).expires_at is None and g.sweep_expired() == []
+    assert g.end_session("s") == [] and g.store.get_item(s.item_id) is not None
 
 
-def test_expired_item_hidden_before_sweep_then_marked_expired(store):
+def test_long_term_expires_after_90_idle_days_and_use_extends(store):
     clock = FakeClock(T0)
-    g = gate(store, clock, mitigations={"expiration": True})
-    short = g.write("coder", "s", "short_term", "team", "mật khẩu wifi tạm")
+    g = gate(store, clock, mitigations=ON)
     keep = g.write("coder", "s", "long_term", "team", "mật khẩu wifi chính")
-    assert g.store.get_item(keep.item_id).expires_at is not None   # long_term: 180 ngày
-    clock.advance(hours=23)
-    assert len(g.retrieve("planner", "s1", "mật khẩu wifi")) == 2
-    clock.advance(hours=2)                         # short_term: 1 ngày
-    assert [v.content for v in g.retrieve("planner", "s2", "mật khẩu wifi")] == ["mật khẩu wifi chính"]
-    assert g.store.get_item(short.item_id).status == "active"      # chưa quét
-    assert g.sweep_expired() == [short.item_id]
-    assert g.store.get_item(short.item_id).status == "expired"
-    assert g.audit_log()[-1].reason == "active->expired: hết hạn retention"
-    clock.advance(days=179)                        # tổng 180 ngày + 1 giờ
-    assert g.retrieve("planner", "s3", "mật khẩu wifi") == []
+    assert g.store.get_item(keep.item_id).expires_at == T0 + timedelta(days=90)
+    clock.advance(days=60)
+    assert len(g.retrieve("planner", "s1", "mật khẩu wifi")) == 1          # được dùng -> gia hạn
+    assert g.store.get_item(keep.item_id).expires_at == T0 + timedelta(days=150)
+    clock.advance(days=89)                                                  # T0 + 149: vẫn còn
+    assert g.sweep_expired() == []
+    clock.advance(days=2)                                                   # 91 ngày không dùng
+    assert g.retrieve("planner", "s2", "mật khẩu wifi") == []              # ẩn ngay, chưa cần quét
+    assert g.store.get_item(keep.item_id).status == "active"
     assert g.sweep_expired() == [keep.item_id]
+    assert g.store.get_item(keep.item_id).status == "expired"
+    assert g.audit_log()[-1].reason == "active->expired: hết hạn retention"
 
 
-def test_retention_null_means_no_deadline():
-    g = gate(mitigations={"expiration": True}, retention_days={"long_term": None})
+def test_update_counts_as_use():
+    clock = FakeClock(T0)
+    g = gate(clock=clock, mitigations=ON)
+    v = g.write("coder", "s", "long_term", "team", "bản 1")
+    clock.advance(days=80)
+    g.write("coder", "s", "long_term", "team", "bản 2", item_id=v.item_id)
+    assert g.store.get_item(v.item_id).expires_at == T0 + timedelta(days=170)
+
+
+def test_retrieved_expires_after_7_days_only_with_web_source(store):
+    clock = FakeClock(T0)
+    g = gate(store, clock, mitigations=ON)
+    g.observe("coder", "w", Source(kind="web", locator="https://docs.example/api", content="endpoint v2"))
+    web = g.write("coder", "w", "retrieved", "team", "endpoint là api.v2")
+    g.observe("planner", "f", Source(kind="file", locator="notes.md", content="endpoint v2"))
+    local = g.write("planner", "f", "retrieved", "team", "endpoint ghi trong notes.md")
+    assert g.store.get_item(web.item_id).expires_at == T0 + timedelta(days=7)
+    assert g.store.get_item(local.item_id).expires_at is None              # hash nguồn đổi: việc 11b
+    clock.advance(days=7, hours=1)
+    assert [v.item_id for v in g.retrieve("planner", "r", "endpoint", k=5)] == [local.item_id]
+    assert g.sweep_expired() == [web.item_id]
+
+
+def test_shared_has_no_hard_ttl():
+    g = gate(mitigations=ON)
+    v = g.write("coder", "s", "shared", "team", "quy ước đặt tên nhánh")
+    assert g.store.get_item(v.item_id).expires_at is None
+
+
+def test_short_term_deleted_at_session_end_keeping_audit(store):
+    g = gate(store, mitigations=ON)
+    a = g.write("coder", "s", "short_term", "team", "bước 1 xong")
+    b = g.write("coder", "s", "short_term", "team", "nháp tạm")
+    other = g.write("planner", "s2", "short_term", "team", "của session khác")
+    assert [v.item_id for v in g.retrieve("coder", "s", "bước 1 xong", k=1)] == [a.item_id]
+    keep = g.write("coder", "s", "long_term", "team", "tổng kết bước 1")      # dẫn xuất từ a
+    assert g.end_session("s") == [b.item_id]
+    assert g.store.get_item(b.item_id) is None and g.store.get_version(b.version_id) is None
+    assert g.store.get_item(a.item_id).status == "expired"                     # giữ để không gãy lineage
+    assert g.store.roots(keep.version_id)                                      # FR2 vẫn truy ngược được
+    assert g.store.get_item(other.item_id).status == "active"
+    deletes = [e for e in g.audit_log() if e.op == "delete"]
+    assert [(e.target, e.decision) for e in deletes] == [(f"item:{b.item_id}", "allow")]
+    assert audit.verify(g.audit_log()).ok
+
+
+def test_retention_config_override_and_unknown_key():
+    g = gate(mitigations=ON, retention={"long_term_idle_days": None})
     v = g.write("coder", "s", "long_term", "team", "x")
     assert g.store.get_item(v.item_id).expires_at is None
+    with pytest.raises(ValueError, match="retention"):
+        gate(retention={"long_term": 180})
 
 
 # ---------- redact ----------

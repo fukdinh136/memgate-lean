@@ -61,8 +61,8 @@ Các việc cùng số thứ tự làm song song được. Nếu 5 thành viên 
 Mục tiêu (FR6): khi hai agent cùng đọc một README bẩn rồi cùng ghi một endpoint, hai lần ghi đó chỉ tính là một nguồn. Mục bẩn không được tăng trust score, không được leo vào top-k. Bản đầy đủ nằm ở `notes/k2_independence_design.md`.
 
 1. **Lineage xuyên message.** Khi agent nhận message, các lần đọc của người gửi được ghi thêm vào context của người nhận, nhãn kẹp bằng nhãn message. Nhờ vậy `roots` đi tới nguồn thật, không dừng ở message. Nhãn, quyết định authorize và schema không đổi.
-2. **Chứng thực.** Hai version là chứng thực của nhau khi cosine đủ cao và có chung một giá trị claim (email, URL/host, IP, số tài khoản). Giá trị phải có nguyên văn trong nguồn gốc thì mới được tính.
-3. **Độc lập.** Các nguồn gốc trùng nội dung (hash) hoặc trùng domain bị gộp chung một nhóm; n = số nhóm − 1.
+2. **Chứng thực.** Hai version là chứng thực của nhau khi cosine đủ cao và có chung một giá trị claim (email, URL/host, IP, số tài khoản).
+3. **Độc lập (nguyên văn mục 7.2).** Hai chứng thực độc lập khi toàn bộ roots không giao nhau và khác domain; n = số nhóm độc lập − 1.
 4. **Không cấp quyền.** Chứng thực từ nguồn U không bao giờ cấp quyền hành động, n chỉ vào trust score. Xếp hạng theo trust score mặc định tắt cho tới việc 12.
 5. **Chế độ hỏng `by_agent`** (đếm theo agent thay vì theo nguồn) dùng cho việc 18: bật lên thì mục bẩn phải leo hạng.
 
@@ -91,9 +91,11 @@ Giới hạn kỹ thuật đã biết, sẽ ghi vào báo cáo:
 Câu hỏi xin ý kiến thầy:
 
 1. Đo K2 bằng trust score và thứ hạng top-k, thay vì ASR, có được chấp nhận không? Lý do: chứng thực từ nguồn U không cấp quyền nên ASR không đổi kể cả khi phần K2 hỏng.
-2. Các chỗ lệch đặc tả sau có ổn không?
-    - Bảng retention nhóm tự chọn: short_term 1, retrieved 7, shared 30, long_term 180 ngày.
-    - Độc lập chỉ xét nguồn gốc chứa giá trị, không xét toàn bộ `roots`.
-    - Ablation TMA-NM chạy trên K1 và MEM-INV nhiều agent, vì baseline việc 2 không đi qua gate.
-3. Có cần thêm một model thứ hai (trả phí) để kết quả tổng quát hơn không?
-4. Hạn nộp báo cáo và slide chính thức là ngày nào?
+2. Có cần thêm một model thứ hai (trả phí) để kết quả tổng quát hơn không?
+3. Hạn nộp báo cáo và slide chính thức là ngày nào?
+
+Nhóm bám đặc tả, không tự lệch. Ngày 25/11 đã rà lại và đưa về đúng đặc tả: bảng retention theo mục 6, kind
+nguồn `tool` theo mục 6, cổng hành động nhận chứng thực có roots toàn T theo mục 7.2, kiểm tra độc lập K2 theo
+nguyên văn mục 7.2. Còn hai chỗ đặc tả buộc phải làm rõ, sẽ ghi trong báo cáo: AgentContext ghi xuống đĩa mỗi khi
+nhãn giảm (ghi theo chu kỳ có thể khôi phục nhãn cao hơn, trái NFR2) và Source lưu thêm nội dung để cổng hành
+động khớp nguyên văn sau khi khởi động lại.

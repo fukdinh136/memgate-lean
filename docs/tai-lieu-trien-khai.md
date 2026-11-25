@@ -40,6 +40,7 @@ Những chỗ triển khai làm rõ hơn đặc tả, cần ghi vào mục "Khá
 - **Snapshot `AgentContext`** (mục 6): ghi xuống đĩa ngay mỗi khi nhãn context giảm, thay vì theo chu kỳ. Ghi theo chu kỳ có thể khôi phục nhãn cũ cao hơn nhãn thật, vi phạm NFR2.
 - **Tái dẫn xuất** (mục 5, 7.4): không nâng nhãn mục cũ; tạo mục mới có lineage về nguồn T, mục U cũ giữ nhãn U. Như vậy khớp với "nhãn chỉ đi xuống" ở mục 7.1.
 - **"Nguyên văn"** (mục 5, 7.4): so sau khi chuẩn hoá định dạng (chữ hoa/thường của email, cách viết số), nội dung không đổi. Gate và scorer dùng chung một hàm.
+- **Source lưu thêm nội dung** (mục 6): cổng hành động phải khớp nguyên văn với nguồn T sau khi khởi động lại, mà thực thể Source không có trường nội dung.
 - **LLM**: `gemini-3.5-flash-lite`, vì `gemini-2.5-flash-lite` đã đóng với người dùng mới (lỗi 404).
 - **Hệ agent thí nghiệm**: đội `pair` (planner, coder) và `chain` (planner, coder, researcher); vai trò reviewer trong đặc tả chỉ là ví dụ.
 
@@ -139,7 +140,7 @@ class Gate(Protocol):
 
 ### Nhãn và context
 
-Nhãn xếp U < A < T. Nguồn `user` và `tool_trusted` mang nhãn T; `web`, `mcp`, `file` và nguồn chưa đăng ký mang nhãn U. Nhãn khai báo bị kẹp theo kênh, nên không ai tự nâng nhãn được.
+Nhãn xếp U < A < T. Nguồn `user` và `tool` (tool đã xác thực) mang nhãn T; `web`, `mcp`, `file` và nguồn chưa đăng ký mang nhãn U. Nhãn khai báo bị kẹp theo kênh, nên không ai tự nâng nhãn được.
 
 Mỗi cặp (agent, session) có một `AgentContext` gồm nhãn L (bắt đầu bằng T) và `source_set`. Khi agent đọc x:
 
@@ -325,7 +326,7 @@ Phần còn lại khoảng 57 pd (68 pd với dự phòng); 5 người, mỗi ng
 | 4c | Backend PostgreSQL + pgvector: migration, HNSW, Docker Compose | 3 | 4a | 2 |  | Xong: driver pg8000 (psycopg bị chặn DLL); 124 test pass, 28 test store trên cả hai backend; K1 seed 0–2 trên PostgreSQL ASR 0/6, benign 6/6 như SQLite | Bộ test store pass trên cả SQLite và PostgreSQL |
 | 5 | Cổng hành động, `normalize_value`, luật giá trị ngắn, xác nhận của người dùng | 1,5 | 4a | 1 |  | Xong: MemGate ASR K1 0/60 (cận trên 95% ≈ 5%), benign 59/60; chi tiết trong notes/k1\_results.md | ASR K1 = 0 trên ≥ 60 lượt (cận trên 95% ≤ 5%), cả `pair` và `chain` |
 | 6 | Policy engine, share/promote | 1,5 | 4a | 1 |  | Xong: policy nạp từ YAML vào bảng roles/agents/policies, share/promote, audit\_events; 104 test pass | Không truy cập trái phép nào lọt; mọi lần từ chối có audit (FR7) |
-| 7 | Vòng đời, retention, audit hash chain, redact, công tắc biện pháp | 3 | 4a | 2 |  | Xong: verify phát hiện sửa, xoá, đổi thứ tự dòng; 2 tiến trình × 200 sự kiện không gãy chuỗi (SQLite, PostgreSQL); kết quả K1/K3/MEM-INV không đổi (readonly 0 trượt); TMA-NM: K1 ASR 33/60, MEM-INV 0/90; retention: short\_term 1, retrieved 7, shared 30, long\_term 180 ngày; 242 test pass. Chi tiết trong `notes/lifecycle_audit.md` | Verify phát hiện log bị sửa; hai tiến trình ghi cùng lúc không gãy chuỗi |
+| 7 | Vòng đời, retention, audit hash chain, redact, công tắc biện pháp | 3 | 4a | 2 |  | Xong: verify phát hiện sửa, xoá, đổi thứ tự dòng; 2 tiến trình × 200 sự kiện không gãy chuỗi (SQLite, PostgreSQL); kết quả K1/K3/MEM-INV không đổi (readonly 0 trượt); TMA-NM: K1 ASR 33/60, MEM-INV 0/90; retention theo bảng mục 6 của đặc tả (short\_term theo session, long\_term 90 ngày không dùng, retrieved 7 ngày với nguồn web, shared không TTL cứng); 252 test. Chi tiết trong `notes/lifecycle_audit.md` | Verify phát hiện log bị sửa; hai tiến trình ghi cùng lúc không gãy chuỗi |
 | 8 | Hàng đợi review, reviewer giả lập | 2 | 7 | 2 |  | Chưa bắt đầu | Duyệt/từ chối qua API; hiển thị nguồn gốc, lineage, lý do (NFR9) |
 | 9 | API HTTP, `HttpGate`, worker (`background`, `inline`) | 4 | 4b, 7 | 2 |  | Chưa bắt đầu | Chạy qua HTTP cho kết quả như in-process; p95 ≤ 10 ms trên PostgreSQL (NFR3) |
 | 10 | Kiểm tra độc lập K2 | 2 | 4a | 2 |  | Chưa bắt đầu | Mục bẩn có chứng thực tương quan không tăng trust score, không leo vào top-k (FR6) |
@@ -521,7 +522,7 @@ Trong mỗi luồng, làm từ trên xuống. Số trong ngoặc là việc tư�
 ### Tuần 2–4 · Báo cáo (việc 21)
 
 - [ ] Mỗi luồng viết phần của mình từ tuần 2.
-- [ ] Mục "Khác biệt so với đặc tả": snapshot `AgentContext`, cách diễn đạt tái dẫn xuất, định nghĩa "nguyên văn", cách đo K2, `retrieve` ngoài p95.
+- [ ] Mục "Khác biệt so với đặc tả": snapshot `AgentContext`, Source lưu nội dung, cách diễn đạt tái dẫn xuất, định nghĩa "nguyên văn", `retrieve` ngoài p95.
 - [ ] Báo cáo LaTeX ≥ 20 trang, slide khoảng 30 phút.
 - [ ] README, một lệnh chạy lại toàn bộ, dọn repo. **Nộp.**
 

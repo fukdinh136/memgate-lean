@@ -217,6 +217,25 @@ class SQLiteStore:
     def set_item_status(self, item_id: str, status: str) -> None:
         self.conn.execute("UPDATE items SET status = ? WHERE item_id = ?", (status, item_id))
 
+    def set_item_expires(self, item_id: str, expires_at: datetime | None) -> None:
+        self.conn.execute("UPDATE items SET expires_at = ? WHERE item_id = ?", (_ts(expires_at), item_id))
+
+    def has_dependents(self, item_id: str) -> bool:
+        """Có version của mục KHÁC trỏ cạnh lineage về một version của mục này không."""
+        return self.conn.execute(
+            "SELECT 1 FROM edges e JOIN versions v ON e.parent_kind = 'version' AND e.parent_id = v.version_id"
+            " JOIN versions c ON c.version_id = e.child_version_id"
+            " WHERE v.item_id = ? AND c.item_id <> ? LIMIT 1", (item_id, item_id)).fetchone() is not None
+
+    def delete_item(self, item_id: str) -> None:
+        """Xoá hẳn mục, mọi version, cạnh con và job của nó (short-term hết session). Audit giữ nguyên."""
+        sub = "SELECT version_id FROM versions WHERE item_id = ?"
+        self.conn.execute("UPDATE items SET current_version_id = NULL WHERE item_id = ?", (item_id,))
+        self.conn.execute(f"DELETE FROM edges WHERE child_version_id IN ({sub})", (item_id,))
+        self.conn.execute(f"DELETE FROM jobs WHERE ref_id IN ({sub})", (item_id,))
+        self.conn.execute("DELETE FROM versions WHERE item_id = ?", (item_id,))
+        self.conn.execute("DELETE FROM items WHERE item_id = ?", (item_id,))
+
     def add_version(self, v: Version, edges: list[Edge]) -> None:
         self.conn.execute(
             "INSERT INTO versions VALUES (?,?,?,?,?,?,?,?,?,?)",

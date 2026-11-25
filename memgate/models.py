@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from memgate.labels import Label, label_for_kind, meet
 
-SourceKind = Literal["user", "tool_trusted", "web", "mcp", "file", "agent"]
+SourceKind = Literal["user", "tool", "web", "mcp", "file", "agent"]
 MemoryType = Literal["short_term", "long_term", "retrieved", "shared"]
 Scope = Literal["private", "team", "global"]
 ItemStatus = Literal["pending", "active", "quarantined", "under_review", "expired", "superseded", "rejected"]
@@ -113,6 +113,7 @@ class AgentContext:
     label: Label = Label.T
     sources: list[Source] = field(default_factory=list)
     version_ids: list[str] = field(default_factory=list)
+    short_term_items: list[str] = field(default_factory=list)  # runtime: xoá khi end_session (retention)
 
     @property
     def source_ids(self) -> list[str]:

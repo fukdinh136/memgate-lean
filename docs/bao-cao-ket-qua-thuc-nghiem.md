@@ -95,7 +95,7 @@ Nghiệm thu việc 7 đạt: lệnh verify phát hiện log bị sửa, hai ti�
 | --- | --- |
 | Audit hash chain | `python -m memgate.audit verify` báo đúng seq khi sửa một trường, xoá dòng giữa chuỗi, đổi thứ tự hai dòng; 2 tiến trình × 200 sự kiện: đủ 400 dòng, chuỗi nguyên vẹn trên SQLite và PostgreSQL |
 | Vòng đời | 7 trạng thái, mọi lần chuyển ghi audit; mục mới pending tới khi worker inline tính xong embedding; share, cập nhật chỉ với mục active; trạng thái cuối không được hồi sinh |
-| Retention | Hết hạn theo `Clock`, retrieve bỏ mục quá hạn ngay cả khi chưa quét; hạn theo loại: short\_term 1, retrieved 7, shared 30, long\_term 180 ngày (duyệt 2026-11-25) |
+| Retention | Hết hạn theo `Clock`, retrieve bỏ mục quá hạn ngay cả khi chưa quét; bảng hạn theo mục 6 của đặc tả: short\_term xoá khi hết session, long\_term 90 ngày không dùng, retrieved 7 ngày với nguồn web, shared không TTL cứng |
 | Redact (detect-secrets) | Không bảng nào còn secret sau khi đi qua observe, write, message, trusted fact, authorize, audit, consolidate; 0 lần redact nhầm trên mọi kịch bản và 2193 đoạn trace; \~1 ms/lần |
 | Hồi quy | Chạy lại readonly K1, K3, MEM-INV: 6568 lượt trúng cache, 0 trượt, trace giống hệt |
 

@@ -24,11 +24,10 @@ memgate:
     quarantine: false
     expiration: false
     human_review: false
-  # Retention theo loại memory (ngày; null = không hết hạn), chỉ áp khi mitigations.expiration: true.
-  # Đã duyệt 2026-11-25 (notes/lifecycle_audit.md). Hạn tính lúc tạo mục, chưa gia hạn khi mục được dùng.
-  retention_days:
-    short_term: 1
-    retrieved: 7
-    shared: 30
-    long_term: 180
+  # Retention theo bảng mục 6 của đặc tả, chỉ áp khi mitigations.expiration: true.
+  # short_term: xoá khi session kết thúc (end_session); shared: không có TTL cứng.
+  retention:
+    long_term_idle_days: 90     # 90 ngày không được dùng (retrieve/cập nhật thì gia hạn)
+    retrieved_web_days: 7       # chỉ mục có nguồn web; "hash nguồn đổi" ở việc 11b
+    quarantine_days: 30         # quarantine không được review -> rejected (việc 8)
   worker: inline            # inline: xử lý hàng đợi ngay sau mỗi lần ghi; background ở việc 9

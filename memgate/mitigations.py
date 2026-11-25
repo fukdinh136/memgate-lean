@@ -4,7 +4,7 @@
 |--------------------|----------|-----------------------------------------------------------------|
 | action_gate        | bật      | tắt: authorize luôn allow (vẫn ghi audit)                       |
 | boundary_labeling  | bật      | tắt: message giữa agent mang nhãn T (cấu hình TMA-NM từng agent)|
-| expiration         | tắt      | bật: mục mới có expires_at theo retention, retrieve bỏ mục quá hạn|
+| expiration         | tắt      | bật: retention theo mục 6 đặc tả, retrieve bỏ mục quá hạn         |
 | validation         | tắt      | việc 11b, chưa cài                                              |
 | quarantine         | tắt      | việc 11b, chưa cài                                              |
 | human_review       | tắt      | việc 8, chưa cài                                                |

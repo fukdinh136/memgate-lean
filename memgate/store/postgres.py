@@ -163,6 +163,23 @@ class PostgresStore:
     def set_item_status(self, item_id: str, status: str) -> None:
         self._run("UPDATE items SET status = :s WHERE item_id = :id", s=status, id=item_id)
 
+    def set_item_expires(self, item_id: str, expires_at: datetime | None) -> None:
+        self._run("UPDATE items SET expires_at = :e WHERE item_id = :id", e=expires_at, id=item_id)
+
+    def has_dependents(self, item_id: str) -> bool:
+        return self._one(
+            "SELECT 1 AS x FROM edges e JOIN versions v ON e.parent_kind = 'version' AND e.parent_id = v.version_id"
+            " JOIN versions c ON c.version_id = e.child_version_id"
+            " WHERE v.item_id = :id AND c.item_id <> :id LIMIT 1", id=item_id) is not None
+
+    def delete_item(self, item_id: str) -> None:
+        sub = "SELECT version_id FROM versions WHERE item_id = :id"
+        self._run("UPDATE items SET current_version_id = NULL WHERE item_id = :id", id=item_id)
+        self._run(f"DELETE FROM edges WHERE child_version_id IN ({sub})", id=item_id)
+        self._run(f"DELETE FROM jobs WHERE ref_id IN ({sub})", id=item_id)
+        self._run("DELETE FROM versions WHERE item_id = :id", id=item_id)
+        self._run("DELETE FROM items WHERE item_id = :id", id=item_id)
+
     def add_version(self, v: Version, edges: list[Edge]) -> None:
         if self._one("SELECT 1 AS x FROM items WHERE item_id = :id", id=v.item_id) is None:
             raise KeyError(f"item không tồn tại: {v.item_id}")

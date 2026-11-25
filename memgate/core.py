@@ -22,8 +22,6 @@ if TYPE_CHECKING:
 
 __all__ = ["MemGate", "AgentContext"]
 
-# Retention theo loại memory, đơn vị ngày; None = không hết hạn. Đã duyệt 2026-11-25.
-DEFAULT_RETENTION_DAYS = {"short_term": 1, "retrieved": 7, "shared": 30, "long_term": 180}
 
 
 class MemGate:
@@ -44,7 +42,9 @@ class MemGate:
         self.embedder = embedder or make_embedder((config or {}).get("embedding_model"))
         self.config = config or {}
         self.mitigations = Mitigations.from_config(self.config.get("mitigations"))
-        self.retention_days = {**DEFAULT_RETENTION_DAYS, **(self.config.get("retention_days") or {})}
+        self.retention = {**lifecycle.DEFAULT_RETENTION, **(self.config.get("retention") or {})}
+        if unknown := set(self.retention) - set(lifecycle.DEFAULT_RETENTION):
+            raise ValueError(f"khoá retention không biết: {sorted(unknown)}")
         self.worker = self.config.get("worker", "inline")
         if self.worker != "inline":
             raise NotImplementedError(f"worker {self.worker!r}: chạy nền ở việc 9, hiện chỉ có 'inline'")
@@ -123,6 +123,11 @@ class MemGate:
                 edges.append(Edge(child_version_id=v.version_id, parent_kind="version",
                                   parent_id=item.current_version_id, relation="derived_from"))
             self.add_version(v, edges)
+            lifecycle.set_retrieved_expiry(self, item, v.version_id)
+            if item_id is not None:
+                lifecycle.touch(self, [item_id])                 # cập nhật = được dùng
+        if item_id is None and type == "short_term":
+            ctx.short_term_items.append(item.item_id)
         self.run_worker()
         return v
 
@@ -146,6 +151,16 @@ class MemGate:
 
     def sweep_expired(self) -> list[str]:
         return lifecycle.sweep_expired(self)
+
+    def end_session(self, session: str) -> list[str]:
+        """Kết thúc session: xoá mục short_term ghi trong session (retention, mục 6) và bỏ AgentContext
+        runtime của session. Danh sách mục short_term chỉ nằm trong bộ nhớ tiến trình (AgentContext)."""
+        keys = [k for k in self._contexts if k[1] == session]
+        items = [i for k in keys for i in self._contexts[k].short_term_items]
+        deleted = lifecycle.end_session(self, items)
+        for k in keys:
+            del self._contexts[k]
+        return deleted
 
     def transition(self, item_id: str, to: str, actor: str, reason: str = "") -> str:
         return lifecycle.transition(self, item_id, to, actor, reason)
@@ -213,6 +228,7 @@ class MemGate:
         with self.store.transaction():
             for v in hits:
                 self._read_version(ctx, v)
+            lifecycle.touch(self, [v.item_id for v in hits])     # long_term: gia hạn khi được dùng
         return hits
 
     def _embeddings(self, versions: list[Version]) -> np.ndarray:
@@ -297,6 +313,22 @@ class MemGate:
 
     # ---------- hành động (việc 5) ----------
 
+    def _trusted_memory_roots(self, ctx: AgentContext) -> list[Source]:
+        """Spec 7.2: quyền hành động chỉ dựa vào chứng thực có roots toàn là nguồn T. Mỗi version agent đã
+        đọc trong session mà mục còn active và mọi root mang nhãn T thì các root đó vào kho nguồn T."""
+        if ctx.label >= Label.A:
+            return []                    # luật 1 đã allow, khỏi truy roots
+        out: dict[str, Source] = {}
+        for vid in dict.fromkeys(ctx.version_ids):
+            v = self.store.get_version(vid)
+            item = self.store.get_item(v.item_id) if v is not None else None
+            if item is None or item.status != "active":
+                continue
+            roots = self.store.roots(vid)
+            if roots and all(s.label == Label.T for s in roots):
+                out.update({s.source_id: s for s in roots})
+        return list(out.values())
+
     def confirm_action(self, agent: str, session: str, tool: str, args: dict[str, Any]) -> None:
         """Người dùng xác nhận đúng một hành động (đúng tool, đúng giá trị nhạy cảm) trong session."""
         self._confirmed.add((agent, session, action_gate.confirmation_key(tool, args)))
@@ -305,7 +337,9 @@ class MemGate:
         """Mỗi quyết định ghi một dòng audit. Tắt mitigations.action_gate: luôn allow (ablation)."""
         if self.mitigations.action_gate:
             confirmed = (agent, session, action_gate.confirmation_key(tool, args)) in self._confirmed
-            d = action_gate.authorize(self.context(agent, session), tool, args, confirmed=confirmed)
+            ctx = self.context(agent, session)
+            d = action_gate.authorize(ctx, tool, args, confirmed=confirmed,
+                                      memory_trusted=self._trusted_memory_roots(ctx))
         else:
             d = Decision(decision="allow", reason="action_gate tắt (ablation)")
         self._audit(agent, "authorize", f"{tool} {json.dumps(args, ensure_ascii=False, default=str)}",
